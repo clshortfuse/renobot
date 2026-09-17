@@ -1,0 +1,31 @@
+[Unit]
+Documentation=https://github.com/clshortfuse/renobot/blob/main/docs/deployment.md
+# Legacy direct-Node alternative. Do not enable alongside deploy/compose.yaml.
+Description=Renobot Discord bot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=renobot
+Group=renobot
+WorkingDirectory=/opt/renobot
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/renobot/renobot.env
+ExecStart=/usr/bin/node /opt/renobot/src/index.js
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=renobot
+
+[Install]
+WantedBy=multi-user.target

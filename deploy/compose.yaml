@@ -1,0 +1,35 @@
+services:
+  app:
+    image: ${RENOBOT_IMAGE:?Set RENOBOT_IMAGE to an immutable image tag}
+    container_name: renobot
+    restart: unless-stopped
+    env_file:
+      - ${RENOBOT_ENV_FILE:-/etc/renobot/renobot.env}
+    environment:
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 3000
+      NODE_ENV: production
+    ports:
+      - 127.0.0.1:3000:3000
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
