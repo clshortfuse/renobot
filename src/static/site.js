@@ -1,8 +1,125 @@
+// The locally served MDW bundle exposes its fluent component builder.
+const material = /** @type {{ CustomElement: typeof import('@shortfuse/materialdesignweb/core/CustomElement.js').default } | undefined} */ (Reflect.get(globalThis, '@shortfuse/materialdesignweb'));
+if (material) {
+  material.CustomElement.extend()
+    .observe({ emails: { type: 'array', value: [], reflect: false } })
+    .html`<mdw-list aria-label="Verified email addresses"><mdw-list-item mdw-for="{email of emails}" supporting={email.label}>{email.email}<mdw-badge slot="trailing" color="primary-container" ink="on-primary-container">Verified</mdw-badge></mdw-list-item></mdw-list>`
+    .register('renobot-emails');
+  material.CustomElement.extend()
+    .observe({ items: { type: 'array', value: [], reflect: false } })
+    .html`
+      <mdw-list id="payments" padding="8" aria-label="Payments"><mdw-list-item mdw-for="{item of items}" expandable divider supporting={item.received}>
+        {item.recipient} · <mdw-box inline ink="primary">{item.amount}</mdw-box>
+        <mdw-box slot="expansion" color="surface-container" padding="16" gap="8">
+          <mdw-label>Payment type</mdw-label><mdw-body size="small">{item.paymentType}</mdw-body>
+          <mdw-label>Transaction</mdw-label><mdw-body size="small">{item.transaction}</mdw-body>
+          <mdw-label>Status</mdw-label><mdw-body size="small">{item.outcome}</mdw-body>
+          <mdw-body size="small" ink="on-surface-variant" hidden={!item.source}>{item.source}</mdw-body>
+          <mdw-body size="small" ink="on-surface-variant" hidden={!item.peer}>{item.peer}</mdw-body>
+        </mdw-box>
+      </mdw-list-item></mdw-list>
+    `
+    .register('renobot-payments');
+  material.CustomElement.extend()
+    .observe({ person: 'string', userId: 'string', membership: 'string', expiry: 'string', paidAt: 'string', sync: 'string', nextCheck: 'string', busy: 'boolean', roleLabel: { type: 'string', value: 'Check Discord role' } })
+    .html`
+      <mdw-grid padding="16" gap="8" y="center">
+        <mdw-box gap="4" col-span="4" col-span-8="4" col-span-12="3"><mdw-title size="small">{person}</mdw-title><mdw-body size="small" ink="on-surface-variant">{userId}</mdw-body></mdw-box>
+        <mdw-box gap="4" col-span="4" col-span-8="4" col-span-12="3"><mdw-label>{membership}</mdw-label><mdw-body size="small" ink="on-surface-variant">Until {expiry}</mdw-body></mdw-box>
+        <mdw-box gap="4" col-span="4" col-span-8="4" col-span-12="2"><mdw-label size="small" ink="on-surface-variant">Last payment</mdw-label><mdw-body size="small">{paidAt}</mdw-body></mdw-box>
+        <mdw-box gap="4" col-span="4" col-span-8="4" col-span-12="2"><mdw-body size="small">{sync}</mdw-body><mdw-body size="small" ink="on-surface-variant">{nextCheck}</mdw-body></mdw-box>
+        <mdw-box x="start" col-span="4" col-span-8="8" col-span-12="2"><mdw-button id="check" disabled={busy}>{roleLabel}</mdw-button></mdw-box>
+      </mdw-grid><mdw-divider></mdw-divider>
+    `
+    .childEvents({ check: { click() { this.dispatchEvent(new Event('check-role')); } } })
+    .register('renobot-membership');
+  material.CustomElement.extend()
+    .observe({ person: 'string', userId: 'string', donated: 'string', months: 'string', expiry: 'string', sync: 'string', canApprove: 'boolean', busy: 'boolean' })
+    .html`
+      <mdw-card outlined><mdw-grid padding="24" gap="16">
+        <mdw-box gap="4" col-span="4" col-span-8="8" col-span-12="12"><mdw-label size="small" ink="on-surface-variant">Discord user</mdw-label><mdw-title>{person}</mdw-title><mdw-body size="small" ink="on-surface-variant">{userId}</mdw-body></mdw-box>
+        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Donated</mdw-label><mdw-body>{donated}</mdw-body></mdw-box>
+        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Months earned</mdw-label><mdw-body>{months}</mdw-body></mdw-box>
+        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Access until</mdw-label><mdw-body>{expiry}</mdw-body></mdw-box>
+        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Role sync</mdw-label><mdw-body>{sync}</mdw-body></mdw-box>
+        <mdw-box row wrap gap="8" col-span="4" col-span-8="8" col-span-12="12"><mdw-button id="review">Review payments</mdw-button><mdw-button id="approve" filled hidden={!canApprove} disabled={busy}>Approve role</mdw-button></mdw-box>
+      </mdw-grid></mdw-card>
+    `
+    .childEvents({ review: { click() { this.dispatchEvent(new Event('review-payments')); } }, approve: { click() { this.dispatchEvent(new Event('approve-role')); } } })
+    .register('renobot-early-access');
+}
+
+/** @typedef {HTMLElement & { patch: (state: Record<string, string | boolean>) => void, busy: boolean }} RecordElement */
+
 /** @param {string} id */
 function element(id) {
   const node = document.getElementById(id);
   if (!node) throw new Error('Page is incomplete');
   return node;
+}
+
+/** @param {string} csrf */
+async function loadSupporterAccount(csrf) {
+  const status = element('account-status');
+  const check = /** @type {HTMLButtonElement} */ (element('account-check-payments'));
+  const more = /** @type {HTMLButtonElement} */ (element('account-payments-more'));
+  /** @type {string | null} */
+  let cursor = null;
+  /** @type {Record<string, string>[]} */
+  let payments = [];
+  /** @param {boolean} reset */
+  async function load(reset) {
+    const response = await fetch(`/app/api/account${reset || !cursor ? '' : `?before=${encodeURIComponent(cursor)}`}`,
+      { credentials: 'same-origin', cache: 'no-store' });
+    if (!response.ok) throw new Error('Account unavailable');
+    /** @type {{ emails: {email: string, verifiedBy: string}[], earlyAccess: { enabled: boolean, expiresAt: string | null, creditedMonths: number, roleManaged: boolean }, entries: {recipient: string, amount: string, currency: string, receivedAt: string, eventType: string, transactionId: string, outcome: string}[], nextCursor: string | null }} */
+    const result = await response.json();
+    (/** @type {HTMLElement & {patch: (state: object) => void}} */ (element('account-emails'))).patch({
+      emails: result.emails.map((email) => ({ ...email, label: email.verifiedBy === 'discord' ? 'Verified with Discord' : 'Verified email' })),
+    });
+    check.disabled = result.emails.length === 0;
+    const access = result.earlyAccess;
+    element('account-early-access').textContent = !access.enabled ? 'Early Access is not available right now.'
+      : access.expiresAt && new Date(access.expiresAt) > new Date()
+        ? `Eligible until ${new Date(access.expiresAt).toLocaleDateString()}.${access.roleManaged ? ' Discord access granted.' : ' Awaiting access approval.'}`
+        : access.creditedMonths ? 'Your Early Access has expired.' : 'No Early Access recorded yet.';
+    const items = result.entries.map((entry) => ({ amount: `${entry.amount} ${entry.currency}`, recipient: entry.recipient,
+      received: new Date(entry.receivedAt).toLocaleString(), paymentType: entry.eventType, transaction: entry.transactionId,
+      outcome: entry.outcome === 'renewed' ? 'Supporter membership credited' : 'Payment recorded', source: '', peer: '' }));
+    payments = reset ? items : [...payments, ...items];
+    (/** @type {HTMLElement & {patch: (state: object) => void}} */ (element('account-payments'))).patch({ items: payments });
+    cursor = result.nextCursor;
+    more.hidden = !cursor;
+    element('account-payments-status').textContent = payments.length ? '' : 'No payments linked yet.';
+    status.textContent = result.emails.length ? '' : 'Verify an email address to find payments without a Discord account attached.';
+  }
+  more.addEventListener('click', () => {
+    if (!cursor || more.disabled) return;
+    more.disabled = true;
+    void load(false).catch(() => { status.textContent = 'Could not load older payments.'; }).finally(() => { more.disabled = false; });
+  });
+  check.addEventListener('click', () => {
+    if (check.disabled) return;
+    check.disabled = true;
+    void (async () => {
+      try {
+        let linked = 0;
+        let remaining;
+        do {
+          const response = await fetch('/app/api/account/link-payments', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf }) });
+          if (!response.ok) throw new Error('Matching unavailable');
+          const result = /** @type {{ linked: number, more: boolean }} */ (await response.json());
+          linked += result.linked;
+          remaining = result.more;
+        } while (remaining);
+        await load(true);
+        status.textContent = linked ? `${linked} payment${linked === 1 ? '' : 's'} linked to your account.` : 'No additional payments found.';
+      } catch { status.textContent = 'Could not check your payments. Try again.'; }
+      finally { check.disabled = false; }
+    })();
+  });
+  try { await load(true); } catch { status.textContent = 'Your account is temporarily unavailable. Try refreshing.'; }
 }
 
 async function loadSession() {
@@ -15,6 +132,20 @@ async function loadSession() {
     }
     if (!response.ok) throw new Error('Session unavailable');
     const session = await response.json();
+    if (page !== 'app' && document.getElementById('portal-navigation')) {
+      try {
+        const accessResponse = await fetch('/app/api/capabilities', { credentials: 'same-origin', cache: 'no-store' });
+        if (accessResponse.ok) {
+          const { capabilities } = await accessResponse.json();
+          element('kofi-link').hidden = !capabilities.includes('modder');
+          element('admin-kofi-link').hidden = !capabilities.includes('admin');
+          element('admin-early-access-link').hidden = !capabilities.includes('admin');
+          element('portal-navigation').hidden = false;
+        }
+      } catch {
+        // Keep privileged navigation hidden when access cannot be established.
+      }
+    }
     if (page === 'home') {
       const link = /** @type {HTMLAnchorElement} */ (element('portal-link'));
       const account = element('account');
@@ -44,6 +175,7 @@ async function loadSession() {
       } catch {
         element('access-status').hidden = false;
       }
+      if (document.getElementById('account-emails')) await loadSupporterAccount(session.csrf);
     } else if (page === 'admin-early-access') {
       const status = element('early-access-status');
       const approvalStatus = element('early-access-approval-status');
@@ -76,36 +208,19 @@ async function loadSession() {
           const result = await response.json();
           if (current !== version) return;
           const items = result.members.map((member) => {
-            const row = document.createElement('tr');
-            const person = document.createElement('td');
-            const name = document.createElement('strong');
-            name.textContent = member.discordName ?? 'Name unavailable';
-            const id = document.createElement('span');
-            id.className = 'membership-detail';
-            id.textContent = member.discordUserId;
-            person.append(name, id);
-            const total = document.createElement('td');
-            total.textContent = `${member.totalAmount} ${member.currency}`;
-            const months = document.createElement('td');
-            months.textContent = String(member.creditedMonths);
-            const expiry = document.createElement('td');
-            expiry.textContent = member.expiresAt
-              ? `${member.active ? 'Active' : 'Expired'} · ${new Date(member.expiresAt).toLocaleString()}` : 'Not yet earned';
-            const sync = document.createElement('td');
-            sync.textContent = `${member.roleManaged ? 'Grant recorded' : 'Not managed'} · ${member.syncStatus}${member.nextAttemptAt ? ` · Next check ${new Date(member.nextAttemptAt).toLocaleString()}` : ''}`;
-            const detail = document.createElement('td');
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = 'Review payments';
-            button.addEventListener('click', () => { void loadDetail(member.discordUserId, true); });
-            detail.append(button);
-            const approval = document.createElement('td');
-            if (result.enabled && member.active && !member.roleManaged && member.syncStatus === 'idle') {
-              const approve = document.createElement('button');
-              approve.type = 'button';
-              approve.textContent = 'Approve role';
-              approve.addEventListener('click', () => {
-                approve.disabled = true;
+            const row = /** @type {RecordElement} */ (document.createElement('renobot-early-access'));
+            row.setAttribute('role', 'listitem');
+            row.className = 'record early-access-record';
+            const canApprove = result.enabled && member.active && !member.roleManaged && member.syncStatus === 'idle';
+            row.patch({ person: member.discordName ?? 'Name unavailable', userId: member.discordUserId,
+              donated: `${member.totalAmount} ${member.currency}`, months: String(member.creditedMonths),
+              expiry: member.expiresAt ? `${member.active ? 'Active' : 'Expired'} · ${new Date(member.expiresAt).toLocaleString()}` : 'Not yet earned',
+              sync: `${member.roleManaged ? 'Grant recorded' : 'Not managed'} · ${member.syncStatus}${member.nextAttemptAt ? ` · Next check ${new Date(member.nextAttemptAt).toLocaleString()}` : ''}`,
+              canApprove, busy: false });
+            row.addEventListener('review-payments', () => { void loadDetail(member.discordUserId, true); });
+            row.addEventListener('approve-role', () => {
+                if (!canApprove || row.busy) return;
+                row.busy = true;
                 approvalStatus.textContent = `Scheduling role for ${member.discordUserId}…`;
                 void (async () => {
                   try {
@@ -118,13 +233,10 @@ async function loadSession() {
                     await loadPeople(true);
                   } catch {
                     approvalStatus.textContent = `Could not approve ${member.discordUserId}; refresh before trying again.`;
-                    approve.disabled = false;
+                    row.busy = false;
                   }
                 })();
-              });
-              approval.append(approve);
-            }
-            row.append(person, total, months, expiry, sync, detail, approval);
+            });
             return row;
           });
           if (reset) element('early-access-list').replaceChildren(...items);
@@ -215,6 +327,8 @@ async function loadSession() {
       /** @type {string | null} */
       let cursor = null;
       let shown = 0;
+      /** @type {Record<string, string>[]} */
+      let payments = [];
       /** @param {Response} response @param {boolean} reset */
       async function renderEntries(response, reset) {
         /** @type {{ entries: { id: string, ownerDiscordUserId: string, ownerUsername: string,
@@ -223,12 +337,15 @@ async function loadSession() {
          *   sourceViaProxy: boolean, peerIp: string | null, peerPort: number | null }[], nextCursor: string | null }} */
         const result = await response.json();
         const items = result.entries.map((entry) => {
-          const item = document.createElement('li');
-          item.textContent = `${new Date(entry.receivedAt).toLocaleString()} · ${entry.ownerUsername} (${entry.ownerDiscordUserId}) · ${entry.eventType} · ${entry.amount} ${entry.currency} · Transaction ${entry.transactionId} · ${entry.outcome} · ${entry.sourceViaProxy ? 'Nginx observed' : 'Socket peer'} ${entry.sourceIp ?? 'unknown'}:${entry.sourcePort ?? 'unknown'} · Socket peer ${entry.peerIp ?? 'unknown'}:${entry.peerPort ?? 'unknown'}`;
-          return item;
+          return { amount: `${entry.amount} ${entry.currency}`, recipient: entry.ownerUsername,
+            received: new Date(entry.receivedAt).toLocaleString(), paymentType: entry.eventType,
+            transaction: entry.transactionId, outcome: entry.outcome,
+            source: entry.sourceIp ? `${entry.sourceViaProxy ? 'Forwarded source' : 'Source'}: ${entry.sourceIp}${entry.sourcePort ? `:${entry.sourcePort}` : ''}` : '',
+            peer: entry.sourceViaProxy && entry.peerIp ? `Connection: ${entry.peerIp}${entry.peerPort ? `:${entry.peerPort}` : ''}` : '' };
         });
-        if (reset) { element('admin-entries-list').replaceChildren(...items); shown = 0; }
-        else element('admin-entries-list').append(...items);
+        payments = reset ? items : [...payments, ...items];
+        (/** @type {HTMLElement & { patch: (state: {items: Record<string, string>[]}) => void }} */ (element('admin-entries-list'))).patch({ items: payments });
+        if (reset) shown = 0;
         shown += result.entries.length;
         cursor = result.nextCursor;
         more.hidden = !cursor;
@@ -292,60 +409,33 @@ async function loadSession() {
           const { members, nextCursor } = await response.json();
           if (version !== membersVersion) return;
           const items = members.map((member) => {
-            const item = document.createElement('tr');
+            const item = /** @type {RecordElement} */ (document.createElement('renobot-membership'));
+            item.setAttribute('role', 'listitem');
+            item.className = 'record supporter-record';
             const role = { 'granted-by-renobot': 'Role grant recorded by Renobot',
               pending: 'Role sync pending', retrying: 'Role sync retrying',
               'not-managed': 'No Renobot-managed role', disabled: 'Role sync disabled' }[member.roleStatus]
               ?? 'Role status unavailable';
-            const supporter = document.createElement('td');
-            const name = document.createElement('strong');
-            name.textContent = member.discordName ?? 'Name unavailable';
-            const id = document.createElement('span');
-            id.className = 'membership-detail';
-            id.textContent = member.discordUserId;
-            supporter.append(name, id);
-            const membership = document.createElement('td');
-            const state = document.createElement('span');
-            state.className = `membership-state${member.active ? '' : ' expired'}`;
-            state.textContent = member.active ? 'Active' : 'Expired';
-            const expiry = document.createElement('time');
-            expiry.dateTime = member.expiresAt;
-            expiry.textContent = new Date(member.expiresAt).toLocaleString();
-            membership.append(state, expiry);
-            const payment = document.createElement('td');
-            const paidAt = document.createElement('time');
-            paidAt.dateTime = member.lastPaymentAt;
-            paidAt.textContent = new Date(member.lastPaymentAt).toLocaleString();
-            payment.append(paidAt);
-            const sync = document.createElement('td');
-            sync.textContent = role;
-            if (member.nextAttemptAt) {
-              const next = document.createElement('span');
-              next.className = 'membership-detail';
-              next.textContent = `Next check ${new Date(member.nextAttemptAt).toLocaleString()}`;
-              sync.append(next);
-            }
-            const discord = document.createElement('td');
-            const check = document.createElement('button');
-            check.type = 'button';
-            check.textContent = 'Check Discord role';
-            check.addEventListener('click', () => {
-              if (check.disabled) return;
-              check.disabled = true;
+            item.patch({ person: member.discordName ?? 'Name unavailable', userId: member.discordUserId,
+              membership: member.active ? 'Active' : 'Expired', expiry: new Date(member.expiresAt).toLocaleString(),
+              paidAt: new Date(member.lastPaymentAt).toLocaleString(), sync: role,
+              nextCheck: member.nextAttemptAt ? `Next check ${new Date(member.nextAttemptAt).toLocaleString()}` : '',
+              busy: false, roleLabel: 'Check Discord role' });
+            item.addEventListener('check-role', () => {
+              if (item.busy) return;
+              item.busy = true;
               void (async () => {
                 try {
                   const response = await fetch(`/app/api/modder/kofi/memberships/${encodeURIComponent(member.discordUserId)}`,
                     { credentials: 'same-origin', cache: 'no-store' });
                   if (!response.ok) throw new Error('Role lookup unavailable');
                   const { rolePresent } = await response.json();
-                  check.textContent = rolePresent === null ? 'Role sync disabled'
-                    : rolePresent ? 'Discord role present' : 'Discord role absent';
-                } catch { check.textContent = 'Role lookup unavailable; retry'; }
-                finally { check.disabled = false; }
+                  item.patch({ roleLabel: rolePresent === null ? 'Role sync disabled'
+                    : rolePresent ? 'Discord role present' : 'Discord role absent' });
+                } catch { item.patch({ roleLabel: 'Role lookup unavailable; retry' }); }
+                finally { item.busy = false; }
               })();
             });
-            discord.append(check);
-            item.append(supporter, membership, payment, sync, discord);
             return item;
           });
           if (reset) { element('kofi-memberships-list').replaceChildren(...items); membersCount = 0; }
@@ -398,27 +488,25 @@ async function loadSession() {
       /** @param {{ minimumAmount: string, currency: string, floor: string, active: boolean,
        *   hasVerificationToken: boolean, hasForwardUrl: boolean, prodUrl: string | null, lastWebhookAt: string | null }} settings */
       const showSettings = (settings) => {
-        /** @type {HTMLInputElement} */ (element('minimum-amount')).value = settings.minimumAmount;
         /** @type {HTMLInputElement} */ (element('currency')).value = settings.currency;
-        element('floor-note').textContent = `Minimum allowed: ${settings.floor} ${settings.currency}`;
-        element('token-status').textContent = settings.hasVerificationToken ? 'Token configured (value hidden)' : 'Token not yet configured';
-        element('forward-status').textContent = settings.hasForwardUrl ? 'Destination configured (value hidden)' : 'No forwarding destination';
+        element('token-status').textContent = settings.hasVerificationToken ? 'Token saved' : 'Add your Ko-fi verification token';
+        element('forward-status').textContent = settings.hasForwardUrl ? 'Destination saved' : 'No destination saved';
         element('kofi-prod').hidden = !settings.prodUrl;
         element('kofi-prod-url').textContent = settings.prodUrl;
         element('kofi-role-status').textContent = settings.active
-          ? 'Supporter role sync is enabled: qualifying recurring payments, including Ko-fi tests, renew membership for 35 days. Roles granted by others are never automatically removed.'
-          : 'Supporter role sync is disabled. Receipts are stored without granting roles.';
+          ? 'Qualifying subscriptions renew access for 35 days.'
+          : 'Automatic roles are off. Payments are still recorded.';
         element('kofi-webhook-status').textContent = settings.lastWebhookAt
-          ? `Last verified delivery: ${new Date(settings.lastWebhookAt).toLocaleString()}`
-          : settings.hasVerificationToken ? 'No verified deliveries yet.'
-            : 'Enter your Ko-fi verification token above and save settings to create a webhook URL.';
+          ? `Last payment received: ${new Date(settings.lastWebhookAt).toLocaleString()}`
+          : settings.hasVerificationToken ? 'Waiting for your first payment or test.'
+            : 'Save a verification token to get your webhook URL.';
         element('kofi-entries').hidden = !settings.prodUrl;
         if (settings.prodUrl) void loadEntries();
         form.hidden = false;
         if (settings.prodUrl && !events) {
           events = new EventSource('/app/api/modder/kofi/events');
           events.addEventListener('receipt', () => {
-            element('kofi-webhook-status').textContent = 'New verified delivery recorded. See entries below.';
+            element('kofi-webhook-status').textContent = 'New payment received. Payment history updated.';
             void loadEntries();
             void loadMemberships();
           });
@@ -437,7 +525,7 @@ async function loadSession() {
       element('kofi-memberships-more').addEventListener('click', () => { void loadMemberships(false); });
       element('kofi-memberships-refresh').addEventListener('click', () => { void loadMemberships(); });
       element('kofi-entries-more').addEventListener('click', () => { void loadEntries(false); });
-      status.textContent = 'Memberships and role-sync status are shown below. Ko-fi setup is available when needed.';
+      status.textContent = '';
       form.addEventListener('submit', (event) => {
         event.preventDefault();
         void (async () => {
@@ -445,7 +533,6 @@ async function loadSession() {
           button.disabled = true;
           try {
             const fields = new URLSearchParams({ csrf: session.csrf,
-              minimumAmount: /** @type {HTMLInputElement} */ (element('minimum-amount')).value,
               currency: /** @type {HTMLInputElement} */ (element('currency')).value,
               verificationToken: /** @type {HTMLInputElement} */ (element('verification-token')).value,
               forwardUrlAction: /** @type {HTMLSelectElement} */ (element('forward-action')).value,
@@ -458,7 +545,7 @@ async function loadSession() {
             /** @type {HTMLInputElement} */ (element('verification-token')).value = '';
             /** @type {HTMLInputElement} */ (element('forward-url')).value = '';
             /** @type {HTMLSelectElement} */ (element('forward-action')).value = 'keep';
-            status.textContent = 'Settings saved. See role activation status below; forwarding remains inactive.';
+            status.textContent = 'Settings saved.';
           } catch { status.textContent = 'Could not save settings. Please try again.'; }
           finally { button.disabled = false; }
         })();
@@ -476,6 +563,12 @@ async function loadSession() {
       element('early-access-status').textContent = 'Early-access review is temporarily unavailable.';
     }
   }
+}
+
+const portalMenu = document.getElementById('portal-menu');
+const portalDrawer = document.getElementById('portal-drawer');
+if (portalMenu && portalDrawer && typeof portalMenu.addEventListener === 'function') {
+  portalMenu.addEventListener('click', () => { portalDrawer.toggleAttribute('open'); });
 }
 
 void loadSession();

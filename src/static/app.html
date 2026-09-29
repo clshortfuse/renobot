@@ -6,30 +6,64 @@
   <meta name="color-scheme" content="dark">
   <title>Renobot</title>
   <link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/material.js?color=00a9c5&amp;lightness=dark&amp;resetCSS=false"></script>
   <script src="/assets/site.js" defer></script>
 </head>
 <body data-page="app">
-  <main id="content">
-    <h1>Renobot</h1>
-    <p>Signed in as <strong id="username">Loading…</strong>.</p>
-    <div class="status"><span>Discord connection</span><strong id="connection">Loading…</strong></div>
-    <nav id="portal-navigation" aria-label="Portal navigation" hidden>
-      <a href="/">Home</a>
-      <a href="/app" aria-current="page">Portal</a>
-      <a href="/app/modder/kofi" id="kofi-link" hidden>Supporter memberships</a>
-      <a href="/app/admin/kofi" id="admin-kofi-link" hidden>Owner Ko-fi activity</a>
-      <a href="/app/admin/early-access" id="admin-early-access-link" hidden>Early-access review</a>
-    </nav>
-    <p class="badge" id="owner-badge" hidden>Owner access</p>
-    <p class="badge" id="modder-badge" hidden>Modder access</p>
-    <p class="badge" id="reviewer-badge" hidden>Review access</p>
-    <p id="access-status" role="status" hidden>Access information is temporarily unavailable.</p>
-    <div class="actions">
-      <form method="post" action="/auth/logout">
-        <input type="hidden" name="csrf" id="csrf">
-        <button type="submit" id="sign-out" disabled>Sign out</button>
-      </form>
-    </div>
-  </main>
+  <a class="skip" href="#content">Skip to content</a>
+  <mdw-root>
+    <mdw-nav-drawer id="portal-drawer" slot="start" headline="Renobot" auto-open="1100" fixed-breakpoint="1100">
+      <nav id="portal-navigation" aria-label="Portal navigation" hidden>
+        <mdw-nav-drawer-item icon="dashboard" href="/app" active>Overview</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="favorite" href="/app/modder/kofi" id="kofi-link" hidden>Memberships</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="receipt_long" href="/app/admin/kofi" id="admin-kofi-link" hidden>Ko-fi activity</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="verified" href="/app/admin/early-access" id="admin-early-access-link" hidden>Early-access review</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="home" href="/">Renobot home</mdw-nav-drawer-item>
+      </nav>
+    </mdw-nav-drawer>
+    <mdw-page><mdw-pane block>
+      <mdw-top-app-bar headline="Overview">
+        <mdw-icon-button id="portal-menu" slot="leading" icon="menu" aria-label="Toggle navigation">Menu</mdw-icon-button>
+      </mdw-top-app-bar>
+      <main id="content" class="portal-content">
+        <mdw-box gap="24">
+        <mdw-box gap="12">
+          <mdw-label ink="primary">RenoDX · Discord</mdw-label>
+          <mdw-headline size="large" role="heading" aria-level="1">Welcome to Renobot</mdw-headline>
+          <mdw-body>Hi, <strong id="username">Loading…</strong>.</mdw-body>
+          <!-- Compatibility targets for the session controller; not user-facing content. -->
+          <span hidden><span id="connection"></span><span id="owner-badge"></span><span id="modder-badge"></span><span id="reviewer-badge"></span></span>
+        </mdw-box>
+        <mdw-card outlined><mdw-box padding="24" gap="12"><mdw-title size="medium">Supporting RenoDX</mdw-title><mdw-body>Renobot helps RenoDX modders keep track of their Ko-fi supporters and manage supporter access on Discord.</mdw-body><mdw-body ink="on-surface-variant">Looking for help with RenoDX? Join the conversation on Discord.</mdw-body></mdw-box></mdw-card>
+        <mdw-body id="access-status" role="status" hidden>Some pages couldn't be loaded. Try refreshing.</mdw-body>
+        <mdw-card outlined><mdw-box padding="24" gap="12">
+          <mdw-title size="medium">Verified Emails</mdw-title>
+          <mdw-body>Link the email addresses you use for Ko-fi to find your payments.</mdw-body>
+          <mdw-body size="small" ink="on-surface-variant">Linking payments does not grant Discord roles. The owner reviews access separately.</mdw-body>
+          <renobot-emails id="account-emails"></renobot-emails>
+          <mdw-box row wrap gap="8">
+            <mdw-button outlined href="/auth/discord?email=1">Add Discord Email</mdw-button>
+            <mdw-button id="account-check-payments" disabled>Find my payments</mdw-button>
+          </mdw-box>
+          <mdw-body size="small" ink="on-surface-variant">Other email verification methods are not available yet.</mdw-body>
+          <mdw-body id="account-status" role="status">Loading your account…</mdw-body>
+        </mdw-box></mdw-card>
+        <mdw-card outlined><mdw-box padding="24" gap="12">
+          <mdw-title size="medium">Your Early Access</mdw-title>
+          <mdw-body id="account-early-access">Loading…</mdw-body>
+        </mdw-box></mdw-card>
+        <mdw-card outlined><mdw-box padding="24" gap="12">
+          <mdw-title size="medium">Your Ko-fi payments</mdw-title>
+          <mdw-body id="account-payments-status" role="status"></mdw-body>
+        </mdw-box><renobot-payments id="account-payments"></renobot-payments>
+          <mdw-button id="account-payments-more" hidden>Show older payments</mdw-button>
+        </mdw-card>
+        <mdw-card outlined><mdw-box padding="24" gap="12"><mdw-title size="medium">Account</mdw-title>
+          <form method="post" action="/auth/logout"><input type="hidden" name="csrf" id="csrf"><mdw-button outlined type="submit" id="sign-out" disabled>Sign out</mdw-button></form>
+        </mdw-box></mdw-card>
+        </mdw-box>
+      </main>
+    </mdw-pane></mdw-page>
+  </mdw-root>
 </body>
 </html>

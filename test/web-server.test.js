@@ -71,6 +71,65 @@ async function beginLogin(baseUrl, returnTo) {
 }
 
 describe('dashboard routes', () => {
+  it('requests email only on demand and trusts only Discord-verified addresses', async () => {
+    /** @type {string[][]} */
+    const linked = [];
+    let verified = false;
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      saveLogin: async () => {},
+      verifyDiscordEmail: async (/** @type {string} */ id, /** @type {string} */ email) => { linked.push([id, email]); return true; },
+    }));
+    const request = async (/** @type {RequestInfo | URL} */ url) => new Response(JSON.stringify(
+      String(url).endsWith('/token') ? { access_token: 'token' }
+        : { id: 'member', username: 'member', email: 'member@example.test', verified },
+    ));
+    const base = await startServer({ database, request });
+    assert.equal((await beginLogin(base)).location.searchParams.get('scope'), 'identify');
+    for (const proof of [false, true]) {
+      verified = proof;
+      const start = await fetch(`${base}/auth/discord?email=1`, { redirect: 'manual' });
+      const location = new URL(start.headers.get('location') ?? '');
+      assert.equal(location.searchParams.get('scope'), 'identify email');
+      const callback = await fetch(`${base}/auth/discord/callback?code=code&state=${encodeURIComponent(location.searchParams.get('state') ?? '')}`,
+        { headers: { Cookie: (start.headers.get('set-cookie') ?? '').split(';')[0] ?? '' }, redirect: 'manual' });
+      assert.equal(callback.status, 303);
+    }
+    assert.deepEqual(linked, [['member', 'member@example.test']]);
+  });
+
+  it('scopes personal account reads and payment linking to the session and requires CSRF', async () => {
+    /** @type {(string | undefined)[][]} */
+    const calls = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      supporterAccount: async (/** @type {string} */ id, /** @type {string | undefined} */ before) => {
+        calls.push(['account', id, before]);
+        return { emails: [{ email: 'one@example.test', verifiedBy: 'discord', verifiedAt: new Date(0) },
+          { email: 'two@example.test', verifiedBy: 'discord', verifiedAt: new Date(0) }], balance: null,
+        entries: [{ id: 'own', integration: { account: { lastKnownUsername: 'modder' } }, amount: { toFixed: () => '5.00' },
+          currency: 'USD', supporterEmail: 'private@example.test', receivedAt: new Date(0), occurredAt: new Date(0),
+          eventType: 'Donation', transactionId: 'tx', outcome: 'recorded', sourceIp: 'private' }], nextCursor: null };
+      },
+      linkEmailPayments: async (/** @type {string} */ id) => { calls.push(['link', id]); return { linked: 2, more: false }; },
+    }));
+    const base = await startServer({ database, settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const token = createSession({ id: 'member', username: 'member' }, secret);
+    const headers = { Cookie: `renobot_session=${token}` };
+    assert.equal((await fetch(`${base}/app/api/account`)).status, 401);
+    const response = await fetch(`${base}/app/api/account?userId=someone-else&before=cursor`, { headers });
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.emails.length, 2);
+    assert.equal(data.entries[0].transactionId, 'tx');
+    assert.doesNotMatch(JSON.stringify(data), /private@example|sourceIp/u);
+    const path = `${base}/app/api/account/link-payments`;
+    const formHeaders = { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' };
+    assert.equal((await fetch(path, { method: 'POST', headers: formHeaders, body: 'csrf=wrong' })).status, 403);
+    assert.deepEqual(calls, [['account', 'member', 'cursor']]);
+    const matched = await fetch(path, { method: 'POST', headers: formHeaders,
+      body: new URLSearchParams({ csrf: csrfToken(token, secret), userId: 'someone-else', email: 'unverified@example.test' }) });
+    assert.deepEqual(await matched.json(), { linked: 2, more: false });
+    assert.deepEqual(calls.at(-1), ['link', 'member']);
+  });
   it('shows only the owner early-access totals, periods and credited modders', async () => {
     const calls = [];
     const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
@@ -224,6 +283,7 @@ describe('dashboard routes', () => {
     assert.match(html, /Access portal/u);
     assert.match(html, /Join RenoDX Discord/u);
     assert.match(html, /<link rel="stylesheet" href="\/assets\/site\.css">/u);
+    assert.match(html, /<script src="\/assets\/material\.js\?color=00a9c5&amp;lightness=dark&amp;resetCSS=false" defer><\/script>/u);
     assert.match(html, /<script src="\/assets\/site\.js" defer><\/script>/u);
     assert.doesNotMatch(html, /<style>|\{\{/u);
     assert.doesNotMatch(html, /requests and ban appeals|View information and services|Access tools available to your RenoDX roles/u);
@@ -235,6 +295,7 @@ describe('dashboard routes', () => {
     const baseUrl = await startServer();
     const css = await fetch(`${baseUrl}/assets/site.css`);
     const script = await fetch(`${baseUrl}/assets/site.js`);
+    const material = await fetch(`${baseUrl}/assets/material.js`);
     const missing = await fetch(`${baseUrl}/assets/unknown.css`);
 
     assert.equal(css.status, 200);
@@ -245,6 +306,12 @@ describe('dashboard routes', () => {
     assert.match(script.headers.get('content-type') ?? '', /^text\/javascript/u);
     assert.match(script.headers.get('content-security-policy') ?? '', /script-src 'self'; connect-src 'self'/u);
     assert.match(await script.text(), /\.textContent = session\.username/u);
+    assert.equal(material.status, 200);
+    assert.match(material.headers.get('content-type') ?? '', /^text\/javascript/u);
+    assert.match(material.headers.get('content-security-policy') ?? '', /script-src 'self'; connect-src 'self'/u);
+    assert.match(material.headers.get('content-security-policy') ?? '', /style-src 'self'; style-src-attr 'unsafe-inline'/u);
+    assert.doesNotMatch(material.headers.get('content-security-policy') ?? '', /script-src[^;]*unsafe-inline|style-src 'self' 'unsafe-inline'/u);
+    assert.ok((await material.text()).length > 1000);
     assert.equal(missing.status, 404);
   });
 
@@ -710,17 +777,18 @@ describe('dashboard routes', () => {
     });
     assert.equal((await fetch(`${baseUrl}/app/api/modder/kofi`, { method: 'POST', body: data })).status, 401);
     assert.equal((await post(new URLSearchParams({ ...Object.fromEntries(data), csrf: 'bad' }))).status, 403);
-    assert.equal((await post(new URLSearchParams({ ...Object.fromEntries(data), minimumAmount: '4.99' }))).status, 400);
     assert.equal((await post(new URLSearchParams({ ...Object.fromEntries(data), enabled: 'true' }))).status, 400);
     assert.equal(writes.length, 0);
+    data.delete('minimumAmount');
     const saved = await post(data);
     assert.equal(saved.status, 200);
-    assert.deepEqual(await saved.json(), { configured: false, minimumAmount: '5.00', currency: 'USD',
-      floor: '5.00', hasVerificationToken: false, hasForwardUrl: false, active: false,
+    assert.deepEqual(await saved.json(), { configured: false, currency: 'USD',
+      hasVerificationToken: false, hasForwardUrl: false, active: false,
       prodUrl: null, lastWebhookAt: null });
     assert.equal(writes.length, 1);
     assert.deepEqual(/** @type {any} */ (writes[0]).user, { id: 'member', username: 'member' });
     const settings = /** @type {any} */ (writes[0]).settings;
+    assert.equal(settings.minimumAmount, '5.00');
     assert.equal(settings.verificationToken, 'top-secret');
     assert.equal(settings.forwardUrl, 'https://example.com/hooks');
     assert.equal(settings.forwardUrlAction, 'replace');
@@ -762,8 +830,8 @@ describe('dashboard routes', () => {
     const cookie = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
     const result = await fetch(`${baseUrl}/app/api/modder/kofi`, { headers: cookie });
     assert.equal(result.status, 200);
-    assert.deepEqual(await result.json(), { configured: true, minimumAmount: '7.50', currency: 'USD',
-      floor: '5.00', hasVerificationToken: true, hasForwardUrl: true, active: false,
+    assert.deepEqual(await result.json(), { configured: true, currency: 'USD',
+      hasVerificationToken: true, hasForwardUrl: true, active: false,
       prodUrl: 'https://renobot.example/prod/kofi/private-endpoint', lastWebhookAt: null });
   });
 
@@ -911,10 +979,10 @@ describe('dashboard routes', () => {
     assert.equal(response.headers.get('location'), '/app');
     assert.match(session, /^renobot_session=/u);
     assert.equal(app.status, 200);
-    assert.match(html, /Signed in as <strong id="username">Loading…<\/strong>\./u);
+    assert.match(html, /Hi, <strong id="username">Loading…<\/strong>\./u);
     assert.deepEqual(await account.json(), { username: 'visitor', ready: true, owner: false,
       csrf: csrfToken(session.split('=')[1] ?? '', secret) });
-    assert.match(html, /id="owner-badge" hidden>Owner access/u);
+    assert.match(html, /id="account-emails"/u);
   });
 
   it('persists an OAuth identity before issuing a session and denies login on persistence failure', async () => {
@@ -967,7 +1035,7 @@ describe('dashboard routes', () => {
     assert.match(session, /^renobot_session=/u);
     assert.equal(app.status, 200);
     assert.doesNotMatch(html, /<owner>|&lt;owner&gt;/u);
-    assert.match(html, /id="owner-badge" hidden>Owner access/u);
+    assert.match(html, /id="account-emails"/u);
     const account = await fetch(`${baseUrl}/auth/session`, { headers: { Cookie: session } });
     assert.deepEqual(await account.json(), { username: '<owner>', ready: true, owner: true,
       csrf: csrfToken(session.split('=')[1] ?? '', secret) });

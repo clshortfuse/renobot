@@ -88,6 +88,9 @@ if [[ ! -d "$release_dir" ]]; then
   trap cleanup EXIT
   container=$(docker create "$new_image")
   docker cp "$container:/app/src/static/." "$staging/"
+  docker cp "$container:/app/node_modules/@shortfuse/materialdesignweb/dist/index.min.js" "$staging/material.js"
+  printf '\n' >> "$staging/material.js"
+  cat "$staging/material-icons.js" >> "$staging/material.js"
   docker rm "$container" >/dev/null
   container=
   chmod -R a+rX "$staging"

@@ -3,9 +3,47 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { describe, it } from 'node:test';
 
-import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteJs } from '../src/web-assets.js';
+import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, materialJs, modderKofiPage, notFoundPage, siteCss, siteJs } from '../src/web-assets.js';
 
 describe('static portal assets', () => {
+  it('shows multiple verified addresses and personal payments without a privileged role', async () => {
+    /** @type {Record<string, any>} */
+    const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
+      'account-emails', 'account-early-access', 'account-payments', 'account-payments-status'].map((id) => [id,
+      { hidden: true, disabled: true, state: {}, addEventListener() {}, patch(/** @type {object} */ state) { Object.assign(this.state, state); } }]));
+    /** @type {string[]} */
+    const calls = [];
+    await runInNewContext(siteJs.replace('void loadSession();', "loadSupporterAccount('csrf-value');"), {
+      document: { getElementById: (/** @type {string} */ id) => nodes[id] },
+      fetch: async (/** @type {string} */ path) => {
+        calls.push(path);
+        return { ok: true, json: async () => ({ emails: [
+          { email: 'first@example.test', verifiedBy: 'discord' }, { email: 'second@example.test', verifiedBy: 'discord' },
+        ], earlyAccess: { enabled: true, expiresAt: '2099-01-01T00:00:00Z', creditedMonths: 2, roleManaged: false },
+        entries: [{ recipient: '<script>', amount: '5.00', currency: 'USD', receivedAt: '2026-09-29T00:00:00Z',
+          eventType: 'Donation', transactionId: 'tx', outcome: 'recorded' }], nextCursor: null }) };
+      },
+    });
+    assert.deepEqual(calls, ['/app/api/account']);
+    assert.equal(nodes['account-emails'].state.emails.length, 2);
+    assert.equal(nodes['account-emails'].state.emails[1].email, 'second@example.test');
+    assert.equal(nodes['account-check-payments'].disabled, false);
+    assert.equal(nodes['account-payments'].state.items[0].recipient, '<script>');
+    assert.equal(nodes['account-payments-more'].hidden, true);
+    assert.match(nodes['account-early-access'].textContent, /Awaiting access approval/u);
+  });
+  it('keeps the same capability-gated navigation order on every portal page', () => {
+    for (const html of [appPage, modderKofiPage, adminKofiPage, adminEarlyAccessPage]) {
+      assert.match(html, /<nav id="portal-navigation"[^>]*hidden>/u);
+      const items = [...html.matchAll(/<mdw-nav-drawer-item([^>]*)>([^<]*)<\/mdw-nav-drawer-item>/gu)];
+      assert.deepEqual(items.map((item) => item[2]), ['Overview', 'Memberships', 'Ko-fi activity', 'Early-access review', 'Renobot home']);
+      for (const id of ['kofi-link', 'admin-kofi-link', 'admin-early-access-link']) {
+        assert.ok(items.some((item) => item[1]?.includes(`id="${id}"`) && item[1].includes('hidden')));
+      }
+      assert.equal(items.filter((item) => /\bactive\b/u.test(item[1] ?? '')).length, 1);
+    }
+  });
+
   it('keeps the proxy read timeout longer than the SSE heartbeat interval', () => {
     const nginx = readFileSync(new URL('../deploy/nginx.conf', import.meta.url), 'utf8');
     const server = readFileSync(new URL('../src/web-server.js', import.meta.url), 'utf8');
@@ -18,9 +56,42 @@ describe('static portal assets', () => {
   it('contains no template placeholders or server-side user data', () => {
     for (const html of [adminEarlyAccessPage, adminKofiPage, appPage, modderKofiPage, errorPage, homePage, notFoundPage]) {
       assert.match(html, /<!doctype html>/u);
-      assert.doesNotMatch(html, /\{\{|<script(?! src="\/assets\/site\.js")/u);
+      assert.doesNotMatch(html, /\{\{|<script(?! src="\/assets\/(?:site\.js"|material\.js\?color=00a9c5&amp;lightness=dark&amp;resetCSS=false"))/u);
     }
     assert.doesNotMatch(siteJs, /innerHTML|insertAdjacentHTML|document\.write/u);
+  });
+
+  it('serves Material locally and lays out membership records without scrolling tables', () => {
+    assert.ok(materialJs.length > 1000);
+    for (const html of [adminEarlyAccessPage, modderKofiPage]) {
+      assert.match(html, /src="\/assets\/material\.js\?color=00a9c5&amp;lightness=dark&amp;resetCSS=false"/u);
+      assert.match(html, /role="list"/u);
+      assert.doesNotMatch(html, /<table|membership-table-scroll/u);
+    }
+    assert.match(siteCss, /grid-template-columns:repeat\(auto-fit,minmax\(min\(100%,26rem\),1fr\)\)/u);
+    assert.doesNotMatch(siteCss, /membership-state|\.record[^\n]*::before|mdw-card\{/u);
+    assert.doesNotMatch(siteJs, /createElement\('span'\)|membership-state/u);
+    assert.match(siteJs, /\.observe\(/u);
+    assert.match(siteJs, /\.childEvents\(/u);
+    assert.doesNotMatch(siteJs, /recordFields|createElement\('mdw-/u);
+    assert.match(modderKofiPage, /<mdw-box id="kofi-memberships-list" role="list"/u);
+    assert.match(siteJs, /col-span-12="3"/u);
+  });
+
+  it('uses the documented MDW application shell and form-associated controls', () => {
+    for (const html of [appPage, adminEarlyAccessPage, adminKofiPage, modderKofiPage]) {
+      assert.match(html, /<mdw-root>/u);
+      assert.match(html, /<mdw-nav-drawer[^>]*slot="start"[^>]*auto-open="1100"[^>]*fixed-breakpoint="1100"/u);
+      assert.match(html, /<mdw-page><mdw-pane block>/u);
+      assert.match(html, /<mdw-top-app-bar /u);
+      assert.match(html, /<main id="content" class="portal-content">/u);
+      assert.match(html, /<mdw-icon-button id="portal-menu"/u);
+    }
+    assert.doesNotMatch(modderKofiPage, /id="minimum-amount"/u);
+    assert.match(modderKofiPage, /<mdw-input[^>]*id="verification-token"[^>]*autocomplete="off"[^>]*spellcheck="false"/u);
+    assert.doesNotMatch(modderKofiPage, /autocomplete="new-password"/u);
+    assert.match(modderKofiPage, /<mdw-select[^>]*id="forward-action"/u);
+    assert.match(appPage, /<mdw-button outlined type="submit" id="sign-out" disabled>/u);
   });
 
   it('sets user data as DOM text and the CSRF token as a form value', async () => {
@@ -111,15 +182,15 @@ describe('static portal assets', () => {
     const nodes = Object.fromEntries(['admin-kofi-status', 'admin-kofi-content', 'admin-entries-more',
       'admin-entries-status', 'admin-entries-list', 'admin-operations-list', 'admin-operations-status',
       'admin-operations-refresh'].map((id) => [id, { hidden: true, addEventListener() {}, replaceChildren() {} }]));
-    /** @type {{textContent: string}[]} */
+    /** @type {any[]} */
     let entries = [];
     /** @type {{textContent: string}[]} */
     let operations = [];
-    nodes['admin-entries-list'].replaceChildren = (/** @type {{textContent: string}[]} */ ...items) => { entries = items; };
+    nodes['admin-entries-list'].patch = (/** @type {{items: object[]}} */ state) => { entries = state.items; };
     nodes['admin-operations-list'].replaceChildren = (/** @type {{textContent: string}[]} */ ...items) => { operations = items; };
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'admin-kofi' } },
-        getElementById: (/** @type {string} */ id) => nodes[id], createElement: () => ({ textContent: '' }) },
+        getElementById: (/** @type {string} */ id) => nodes[id], createElement: () => ({ textContent: '', state: {}, setAttribute() {}, patch(/** @type {object} */ state) { Object.assign(this.state, state); } }) },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session' ? { username: 'owner' }
         : path.endsWith('/operations') ? { events: [{ at: '2026-09-29T01:00:00Z', event: 'accepted' }] }
           : { entries: [{ id: 'receipt', ownerDiscordUserId: '12345678901234567', ownerUsername: '<script>',
@@ -127,10 +198,13 @@ describe('static portal assets', () => {
             currency: 'USD', transactionId: 'tx', outcome: 'recorded-no-entitlement' }], nextCursor: null } }),
     });
     assert.equal(nodes['admin-kofi-content'].hidden, false);
-    assert.match(entries[0]?.textContent ?? '', /<script>.*5\.00 USD/u);
+    assert.equal(entries[0]?.recipient, '<script>');
+    assert.equal(entries[0]?.amount, '5.00 USD');
+    assert.equal(entries[0]?.source, '');
+    assert.equal(entries[0]?.peer, '');
     assert.match(operations[0]?.textContent ?? '', /accepted/u);
     assert.match(nodes['admin-operations-status'].textContent, /current process only/u);
-    assert.doesNotMatch(adminKofiPage, /private@example|fixture-token|<script(?! src="\/assets\/site\.js")/u);
+    assert.doesNotMatch(adminKofiPage, /private@example|fixture-token|<script(?! src="\/assets\/(?:site\.js"|material\.js\?color=00a9c5&amp;lightness=dark&amp;resetCSS=false"))/u);
   });
 
   it('renders early-access owner review and credited donations only as DOM text', async () => {
@@ -159,11 +233,11 @@ describe('static portal assets', () => {
       URLSearchParams,
       document: { body: { dataset: { page: 'admin-early-access' } },
         getElementById: (/** @type {string} */ id) => nodes[id],
-        createElement: (/** @type {string} */ tag) => tag === 'button'
-          ? { textContent: '', addEventListener(/** @type {string} */ name, /** @type {() => void} */ callback) {
-            if (name === 'click') review = callback;
+        createElement: (/** @type {string} */ tag) => tag === 'renobot-early-access'
+          ? { state: {}, patch(/** @type {object} */ state) { Object.assign(this.state, state); }, setAttribute() {}, addEventListener(/** @type {string} */ name, /** @type {() => void} */ callback) {
+            if (name === 'review-payments') review = callback;
           } }
-          : { tagName: tag, textContent: '', children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...items) {
+          : { tagName: tag, textContent: '', setAttribute() {}, children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...items) {
             this.children.push(...items);
           } } },
       fetch: async (/** @type {string} */ path, /** @type {{ body?: URLSearchParams }} */ options) => {
@@ -182,8 +256,8 @@ describe('static portal assets', () => {
                     modderDiscordUserId: '23456789012345678' }], nextCursor: null } };
                   },
     });
-    assert.equal(rows[0]?.children[0]?.children[0]?.textContent, '<img onerror=alert(1)>');
-    assert.equal(rows[0]?.children[1]?.textContent, '13.00 USD');
+    assert.equal(rows[0]?.state.person, '<img onerror=alert(1)>');
+    assert.equal(rows[0]?.state.donated, '13.00 USD');
     assert.ok(review);
     review();
     await new Promise((resolve) => setImmediate(resolve));
@@ -229,14 +303,14 @@ describe('static portal assets', () => {
     };
     /** @type {(() => void) | undefined} */
     let onReceipt;
-    /** @type {{ textContent: string, click?: () => void, addEventListener: (event: string, callback: () => void) => void } | undefined} */
+    /** @type {{ state: Record<string, unknown>, tagName: string, setAttribute: () => void, patch: (state: object) => void, addEventListener: (event: string, callback: () => void) => void, click?: () => void } | undefined} */
     let liveRoleButton;
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id],
-        createElement: (/** @type {string} */ tag) => tag === 'button'
-          ? (liveRoleButton = { textContent: '', addEventListener(/** @type {string} */ event, /** @type {() => void} */ callback) {
-            if (event === 'click') this.click = callback;
-          } }) : ({ tagName: tag, textContent: '', children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...children) { this.children.push(...children); } }) },
+        createElement: (/** @type {string} */ tag) => tag === 'renobot-membership'
+          ? (liveRoleButton = { state: {}, tagName: tag, setAttribute() {}, patch(/** @type {object} */ state) { Object.assign(this.state, state); }, addEventListener(/** @type {string} */ event, /** @type {() => void} */ callback) {
+            if (event === 'check-role') this.click = callback;
+          } }) : ({ tagName: tag, textContent: '', setAttribute() {}, children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...children) { this.children.push(...children); } }) },
       EventSource: class {
         /** @param {string} url */
         constructor(url) { assert.equal(url, '/app/api/modder/kofi/events'); }
@@ -265,25 +339,24 @@ describe('static portal assets', () => {
     assert.equal(nodes['kofi-form'].hidden, false);
     assert.equal(nodes['kofi-memberships'].hidden, false);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(memberships[0]?.tagName, 'tr');
-    assert.deepEqual(memberships[0]?.children.map((/** @type {any} */ cell) => cell.tagName), ['td', 'td', 'td', 'td', 'td']);
-    assert.equal(memberships[0]?.children[0]?.children[0]?.textContent, '<img onerror=alert(1)>');
-    assert.equal(memberships[0]?.children[0]?.children[1]?.textContent, '<script>');
-    assert.equal(memberships[0]?.children[1]?.children[0]?.textContent, 'Active');
-    assert.equal(memberships[0]?.children[3]?.textContent, 'Role grant recorded by Renobot');
+    assert.equal(memberships[0]?.tagName, 'renobot-membership');
+    assert.equal(memberships[0]?.state.person, '<img onerror=alert(1)>');
+    assert.equal(memberships[0]?.state.userId, '<script>');
+    assert.equal(memberships[0]?.state.membership, 'Active');
+    assert.equal(memberships[0]?.state.sync, 'Role grant recorded by Renobot');
     assert.ok(liveRoleButton?.click);
     liveRoleButton.click();
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(liveRoleButton.textContent, 'Discord role present');
-    assert.equal(nodes['token-status'].textContent, 'Token configured (value hidden)');
-    assert.equal(nodes['forward-status'].textContent, 'Destination configured (value hidden)');
-    assert.equal(nodes['floor-note'].textContent, 'Minimum allowed: 5.00 USD');
+    assert.equal(liveRoleButton.state.roleLabel, 'Discord role present');
+    assert.equal(nodes['token-status'].textContent, 'Token saved');
+    assert.equal(nodes['forward-status'].textContent, 'Destination saved');
+    assert.doesNotMatch(modderKofiPage, /id="floor-note"/u);
     assert.equal(nodes['kofi-prod-url'].textContent, 'https://renobot.example/prod/kofi/private-id');
-    assert.match(nodes['kofi-role-status'].textContent, /role sync is disabled/u);
+    assert.match(nodes['kofi-role-status'].textContent, /Automatic roles are off/u);
     assert.ok(onReceipt);
     onReceipt();
     await new Promise((resolve) => setImmediate(resolve));
-    assert.match(nodes['kofi-webhook-status'].textContent, /New verified delivery recorded/u);
+    assert.match(nodes['kofi-webhook-status'].textContent, /New payment received/u);
     assert.match(rendered[0]?.textContent ?? '', /<script>.*5\.00 USD.*No linked Discord account/u);
     assert.match(rendered[0]?.textContent ?? '', /Transaction tx-1.*Recurring/u);
     assert.equal(nodes['kofi-entries-status'].textContent, 'Entries shown: 1');
@@ -294,7 +367,9 @@ describe('static portal assets', () => {
     assert.match(rendered[1]?.textContent ?? '', /Donation.*1\.00 USD/u);
     assert.equal(nodes['kofi-entries-status'].textContent, 'Entries shown: 2');
     assert.equal(nodes['kofi-entries-more'].hidden, true);
-    assert.match(modderKofiPage, /Do not replace a working Ko-fi webhook/u);
+    assert.match(modderKofiPage, /Keep your existing webhook/u);
+    assert.match(modderKofiPage, /<mdw-card outlined><mdw-details id="kofi-setup">/u);
+    assert.doesNotMatch(modderKofiPage, /<details|<summary/u);
     assert.doesNotMatch(modderKofiPage, /value="(?:v1:|secret)|webhooks\/kofi/u);
   });
 
@@ -314,7 +389,7 @@ describe('static portal assets', () => {
             : { minimumAmount: '5.00', currency: 'USD', floor: '5.00',
             hasVerificationToken: false, hasForwardUrl: false, prodUrl: null, lastWebhookAt: null } }),
       });
-          assert.match(nodes['kofi-webhook-status'].textContent, /Enter your Ko-fi verification token.*save settings/u);
+          assert.match(nodes['kofi-webhook-status'].textContent, /Save a verification token.*webhook URL/u);
           assert.equal(nodes['kofi-prod'].hidden, true);
           assert.equal(nodes['kofi-prod-url'].textContent, null);
   });
@@ -361,7 +436,7 @@ describe('static portal assets', () => {
     });
     assert.ok(submit);
     assert.equal(streams, 0);
-    assert.match(nodes['kofi-webhook-status'].textContent, /Enter your Ko-fi verification token/u);
+    assert.match(nodes['kofi-webhook-status'].textContent, /Save a verification token/u);
     nodes['verification-token'].value = 'private-value';
     nodes['forward-action'].value = 'replace';
     nodes['forward-url'].value = 'https://example.com/hook';
@@ -373,8 +448,8 @@ describe('static portal assets', () => {
     assert.equal(nodes['verification-token'].value, '');
     assert.equal(nodes['forward-url'].value, '');
     assert.equal(nodes['forward-action'].value, 'keep');
-    assert.equal(nodes['token-status'].textContent, 'Token configured (value hidden)');
-    assert.equal(nodes['settings-status'].textContent, 'Settings saved. See role activation status below; forwarding remains inactive.');
+    assert.equal(nodes['token-status'].textContent, 'Token saved');
+    assert.equal(nodes['settings-status'].textContent, 'Settings saved.');
     assert.equal(streams, 1);
     assert.equal(nodes['kofi-prod'].hidden, false);
     submit({ preventDefault() {} });

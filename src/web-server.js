@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import { DiscordAPIError } from 'discord.js';
 
-import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
+import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, materialJs, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
 import { requiredCapability, resolveCapabilities } from './web-capabilities.js';
 import { MissingVerificationTokenError } from './database.js';
 import { maxKofiBodyBytes, receiveKofiReceipt } from './kofi-ingestion.js';
@@ -72,7 +72,7 @@ export function createWebServer(options) {
   }
   const server = createServer(async (incoming, response) => {
     response.setHeader('Cache-Control', 'no-store');
-    response.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+    response.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     try {
@@ -90,6 +90,45 @@ export function createWebServer(options) {
       }
       if (!options.config) {
         sendText(response, 404, 'Not found');
+        return;
+      }
+      if ((incoming.method === 'GET' && url.pathname === '/app/api/account')
+        || (incoming.method === 'POST' && url.pathname === '/app/api/account/link-payments')) {
+        const token = readCookie(incoming.headers.cookie, sessionCookie);
+        const session = readSession(token, options.config.sessionSecret);
+        if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
+        if (!options.database) { sendJson(response, 503, { error: 'Please try again later' }); return; }
+        if (incoming.method === 'POST') {
+          if (!incoming.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) {
+            sendJson(response, 415, { error: 'Unsupported content type' }); return;
+          }
+          const body = await readForm(incoming, 4096);
+          if (!verifyCsrfToken(body.get('csrf') ?? '', token ?? '', options.config.sessionSecret)) {
+            sendJson(response, 403, { error: 'Invalid CSRF token' }); return;
+          }
+          if (!options.settingsConfig) { sendJson(response, 503, { error: 'Please try again later' }); return; }
+          sendJson(response, 200, await options.database.linkEmailPayments(session.id, options.settingsConfig.currency,
+            Boolean(options.earlyAccessRoleId)));
+          return;
+        }
+        const before = url.searchParams.get('before') ?? undefined;
+        if (before && !/^[A-Za-z0-9_-]{1,255}$/u.test(before)) {
+          sendJson(response, 400, { error: 'Invalid cursor' }); return;
+        }
+        const account = await options.database.supporterAccount(session.id, before);
+        const roleManaged = options.earlyAccessRoleId
+          ? await options.database.hasManagedSupporterRole(session.id, options.earlyAccessRoleId) : false;
+        sendJson(response, 200, {
+          emails: account.emails.map(({ email, verifiedBy, verifiedAt }) => ({ email, verifiedBy, verifiedAt })),
+          earlyAccess: { enabled: Boolean(options.earlyAccessRoleId), totalAmount: account.balance?.totalAmount.toFixed(2) ?? '0.00',
+            creditedMonths: account.balance?.creditedMonths ?? 0, expiresAt: account.balance?.expiresAt ?? null,
+            roleManaged },
+          entries: account.entries.map((entry) => ({ id: entry.id, recipient: entry.integration.account.lastKnownUsername,
+            receivedAt: entry.receivedAt, occurredAt: entry.occurredAt, eventType: entry.eventType,
+            amount: entry.amount.toFixed(2), currency: entry.currency, transactionId: entry.transactionId,
+            outcome: entry.outcome, entitlementExpiresAt: entry.entitlementExpiresAt })),
+          nextCursor: account.nextCursor,
+        });
         return;
       }
       const receiptEndpoint = /^\/prod\/kofi\/([A-Za-z0-9_-]{43})$/u.exec(url.pathname);
@@ -127,6 +166,10 @@ export function createWebServer(options) {
       }
       if (incoming.method === 'GET' && url.pathname === '/assets/site.js') {
         response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(siteJs);
+        return;
+      }
+      if (incoming.method === 'GET' && url.pathname === '/assets/material.js') {
+        response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(materialJs);
         return;
       }
       if (incoming.method === 'GET' && url.pathname === '/') {
@@ -429,9 +472,7 @@ export function createWebServer(options) {
         }
         try {
           const integration = await options.database.getIntegration(session.id);
-          sendJson(response, 200, { configured: Boolean(integration), minimumAmount: integration?.minimumAmount.toFixed(2)
-            ?? options.settingsConfig.minimumAmount, currency: options.settingsConfig.currency,
-          floor: options.settingsConfig.minimumAmount,
+          sendJson(response, 200, { configured: Boolean(integration), currency: options.settingsConfig.currency,
           hasVerificationToken: Boolean(integration?.verificationTokenCiphertext),
           hasForwardUrl: Boolean(integration?.forwardUrlCiphertext), active: Boolean(options.supporterRoleId),
           prodUrl: integration ? new URL(`/prod/kofi/${integration.endpointId}`, options.config.publicBaseUrl).href : null,
@@ -501,7 +542,7 @@ export function createWebServer(options) {
           client_id: options.config.clientId,
           redirect_uri: new URL('/auth/discord/callback', options.config.publicBaseUrl).href,
           response_type: 'code',
-          scope: 'identify',
+          scope: url.searchParams.get('email') === '1' ? 'identify email' : 'identify',
           state,
         }).toString();
         response.setHeader('Set-Cookie', secureCookie(stateCookie, state, 600));
@@ -522,7 +563,8 @@ export function createWebServer(options) {
           return;
         }
         const user = await exchangeDiscordCode(options.config, code, request);
-        await options.database?.saveLogin(user);
+        await options.database?.saveLogin({ id: user.id, username: user.username });
+        if (user.verifiedEmail) await options.database?.verifyDiscordEmail(user.id, user.verifiedEmail);
         response.setHeader('Set-Cookie', secureCookie(sessionCookie,
           createSession(user, options.config.sessionSecret), 8 * 60 * 60));
         redirect(response, oauthReturnTo(state, options.config.sessionSecret));
@@ -609,7 +651,8 @@ async function exchangeDiscordCode(config, code, request) {
   if (!isRecord(user) || typeof user.id !== 'string' || typeof user.username !== 'string') {
     throw new Error('Discord returned an invalid user response.');
   }
-  return { id: user.id, username: user.username };
+  return { id: user.id, username: user.username,
+    verifiedEmail: user.verified === true && typeof user.email === 'string' ? user.email : null };
 }
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */

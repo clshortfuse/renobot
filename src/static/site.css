@@ -1,4 +1,6 @@
-:root{color-scheme:dark;font:16px/1.6 Inter,ui-sans-serif,system-ui,sans-serif;background:#080b12;color:#eef2ff;scroll-behavior:smooth}
+[hidden]{display:none!important}
+@scope (body[data-page="home"],body:not([data-page])) {
+:scope{color-scheme:dark;font:16px/1.6 Inter,ui-sans-serif,system-ui,sans-serif;background:#080b12;color:#eef2ff;scroll-behavior:smooth}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{min-height:100vh;margin:0;background:radial-gradient(circle at 15% 5%,#073b4c 0,transparent 35rem),radial-gradient(circle at 95% 75%,#123a4c 0,transparent 32rem),#080b12}
@@ -42,20 +44,6 @@ footer small{grid-column:1/-1}
 .badge{display:inline-block;padding:.25rem .6rem;border-radius:999px;background:#22d3ee29;color:#67e8f9;font-size:.85rem;font-weight:700}
 body>main:not(.site){width:min(100% - 3rem,48rem);margin:10vh auto;padding:clamp(2rem,6vw,4.5rem);border:1px solid #ffffff1f;border-radius:1.5rem;background:#111622e8;box-shadow:0 2rem 6rem #0008}
 body[data-page="modder-kofi"]>main{width:min(100% - 3rem,78rem)}
-.membership-table-scroll{overflow-x:auto;margin:1.25rem 0 1rem;border:1px solid #ffffff24;border-radius:.85rem}
-.membership-table-scroll:focus-visible{outline:2px solid #22d3ee;outline-offset:2px}
-.membership-table{width:100%;min-width:58rem;border-collapse:collapse;text-align:left;font-size:.9rem}
-.membership-table th{padding:.85rem 1rem;background:#1a2938;color:#dbe3ff;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
-.membership-table td{padding:1rem;vertical-align:top;border-top:1px solid #ffffff1f}
-.membership-table tbody tr:nth-child(even){background:#ffffff08}
-.membership-table tbody tr:hover{background:#22d3ee0c}
-.membership-table td:first-child{font-variant-numeric:tabular-nums;white-space:nowrap}
-.membership-table td:first-child strong{display:block;color:#eef2ff;font-variant-numeric:normal}
-.membership-table time{display:block;white-space:nowrap;color:#b8c0d9;font-variant-numeric:tabular-nums}
-.membership-table .membership-state{display:inline-block;padding:.2rem .65rem;border-radius:999px;background:#22d3ee26;color:#67e8f9;font-weight:700}
-.membership-table .membership-state.expired{background:#ffffff19;color:#b8c0d9}
-.membership-table .membership-detail{display:block;margin-top:.4rem;color:#929db9;font-size:.83rem}
-.membership-table button{padding:.5rem .75rem;white-space:nowrap;font-size:.82rem}
 form{margin:0}
 form#kofi-form{display:grid;gap:.65rem;margin-top:1.5rem}
 input,select{width:100%;padding:.7rem;border:1px solid #ffffff45;border-radius:.55rem;background:#080b12;color:#eef2ff;font:inherit}
@@ -63,3 +51,19 @@ input:focus,select:focus{outline:2px solid #22d3ee;outline-offset:2px}
 label{font-weight:700}
 button:disabled{opacity:.55;cursor:wait}
 @media(max-width:700px){header{align-items:flex-start}header nav{justify-content:flex-end;gap:.75rem}.site section:not(.hero){grid-template-columns:1fr;padding-block:4rem}.hero{min-height:36rem;padding-block:4rem}footer{grid-template-columns:1fr}footer small{grid-column:auto}}
+
+}
+
+/* App-specific responsive grid and accessibility; MDW owns component appearance. */
+body:is([data-page="app"],[data-page="admin-kofi"],[data-page="admin-early-access"],[data-page="modder-kofi"]){margin:0;background:rgb(var(--mdw-color__surface));color:rgb(var(--mdw-color__on-surface));font:var(--mdw-typescale__body-large__font)}
+mdw-root{min-height:100vh}
+.portal-content{min-width:0;padding:clamp(16px,3vw,40px)}
+.record-grid,.overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr));gap:16px;margin-block:24px}
+.record{min-width:0;overflow-wrap:anywhere}
+.portal-content form{display:contents}
+.portal-content details{margin-block:24px}
+.portal-content summary{cursor:pointer}
+.portal-content ul{overflow-wrap:anywhere}
+.skip{position:fixed;z-index:30;inset:16px auto auto 16px;transform:translateY(-200%);background:rgb(var(--mdw-color__surface));color:rgb(var(--mdw-color__on-surface))}
+.skip:focus{transform:none}
+.preview-notice{padding:8px 16px;background:rgb(var(--mdw-color__tertiary-container));color:rgb(var(--mdw-color__on-tertiary-container));text-align:center;font:var(--mdw-typescale__label-large__font)}

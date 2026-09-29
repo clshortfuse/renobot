@@ -6,66 +6,77 @@
   <meta name="color-scheme" content="dark">
   <title>Supporter memberships · Renobot</title>
   <link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/material.js?color=00a9c5&amp;lightness=dark&amp;resetCSS=false"></script>
   <script src="/assets/site.js" defer></script>
 </head>
 <body data-page="modder-kofi">
-  <main id="content">
-    <nav aria-label="Portal navigation"><a href="/app">← Portal</a></nav>
-    <p class="eyebrow">Modder settings</p>
-    <h1>Supporter memberships</h1>
-    <p id="settings-status" role="status">Checking access…</p>
+  <a class="skip" href="#content">Skip to content</a>
+  <mdw-root>
+    <mdw-nav-drawer id="portal-drawer" slot="start" headline="Renobot" auto-open="1100" fixed-breakpoint="1100">
+      <nav id="portal-navigation" aria-label="Portal navigation" hidden>
+        <mdw-nav-drawer-item icon="dashboard" href="/app">Overview</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="favorite" href="/app/modder/kofi" id="kofi-link" hidden active>Memberships</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="receipt_long" href="/app/admin/kofi" id="admin-kofi-link" hidden>Ko-fi activity</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="verified" href="/app/admin/early-access" id="admin-early-access-link" hidden>Early-access review</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="home" href="/">Renobot home</mdw-nav-drawer-item>
+      </nav>
+    </mdw-nav-drawer>
+    <mdw-page><mdw-pane block>
+      <mdw-top-app-bar headline="Memberships"><mdw-icon-button id="portal-menu" slot="leading" icon="menu" aria-label="Toggle navigation">Menu</mdw-icon-button></mdw-top-app-bar>
+      <main id="content" class="portal-content">
+    <mdw-box gap="24">
+    <mdw-box gap="8"><mdw-headline size="large" role="heading" aria-level="1">Your supporters</mdw-headline><mdw-body ink="on-surface-variant">Memberships, payments, and your Ko-fi connection.</mdw-body></mdw-box>
+    <mdw-body id="settings-status" role="status">Checking access…</mdw-body>
     <section id="kofi-memberships" hidden>
-      <h2>Membership status</h2>
-      <p>Expiry is based on the last qualifying payment. Renobot's recorded grant and sync work are distinct from the current Discord role. Use Check Discord role for a live lookup; manually assigned roles are not tracked by Renobot.</p>
-      <p id="kofi-memberships-status" role="status">Loading memberships…</p>
-      <div class="membership-table-scroll" role="region" aria-label="Supporter memberships" tabindex="0">
-        <table class="membership-table">
-          <thead><tr><th scope="col">Supporter</th><th scope="col">Membership</th><th scope="col">Last payment</th><th scope="col">Role sync</th><th scope="col">Discord role</th></tr></thead>
-          <tbody id="kofi-memberships-list"></tbody>
-        </table>
-      </div>
-      <button id="kofi-memberships-more" type="button" hidden>Load older memberships</button>
-      <button id="kofi-memberships-refresh" type="button">Refresh status</button>
+      <mdw-box gap="12"><mdw-box row wrap gap="12" y="center"><mdw-title size="large" role="heading" aria-level="2" flex-1>Memberships</mdw-title><mdw-button id="kofi-memberships-refresh" outlined type="button" icon="refresh">Refresh</mdw-button></mdw-box>
+      <!-- Membership expiry uses the last qualifying payment. Recorded grants are not live Discord role checks; externally assigned roles are not managed. -->
+      <mdw-body size="small" ink="on-surface-variant">Use Check Discord role to confirm someone's current access.</mdw-body>
+      <mdw-body id="kofi-memberships-status" role="status">Loading memberships…</mdw-body>
+      <mdw-box id="kofi-memberships-list" role="list" aria-label="Supporter memberships"></mdw-box>
+      <mdw-button id="kofi-memberships-more" outlined type="button" hidden>Load older memberships</mdw-button>
+      </mdw-box>
     </section>
-    <details id="kofi-setup">
-      <summary>Ko-fi setup and webhook</summary>
-      <p>Save settings for your own integration. Verified Ko-fi deliveries, including Ko-fi test payments, are recorded as receipts. Forwarding is not active. Do not replace a working Ko-fi webhook until you are ready for this limitation.</p>
-    <form id="kofi-form" hidden>
-      <label for="minimum-amount">Minimum monthly amount</label>
-      <input id="minimum-amount" name="minimumAmount" type="number" min="0.01" max="100000" step="0.01" required>
-      <p id="floor-note" class="muted"></p>
-      <label for="currency">Currency</label>
-      <input id="currency" name="currency" readonly required>
-      <label for="verification-token">Ko-fi verification token (leave blank to keep the current token)</label>
-      <input id="verification-token" name="verificationToken" type="password" autocomplete="new-password" maxlength="256">
-      <p id="token-status" class="muted"></p>
-      <label for="forward-action">Courtesy forwarding</label>
-      <select id="forward-action" name="forwardUrlAction">
+    <mdw-card outlined><mdw-details id="kofi-setup">
+      <mdw-box slot="summary" gap="4"><mdw-title>Ko-fi connection</mdw-title><mdw-body size="small" ink="on-surface-variant">Payment settings and webhook URL</mdw-body></mdw-box>
+      <mdw-box padding="24" gap="16">
+      <mdw-body ink="on-surface-variant">Forwarding is unavailable. Keep your existing webhook if another service still needs your payments.</mdw-body>
+      <!-- Verified real and test deliveries are both stored. Forwarding configuration is retained for future support but no outbound deliveries are made. -->
+    <form id="kofi-form" hidden><mdw-box gap="12">
+      <mdw-input outlined label="Currency" id="currency" name="currency" readonly required></mdw-input>
+      <mdw-input outlined label="Ko-fi verification token" supporting="Leave blank to keep the current token" id="verification-token" name="verificationToken" type="password" autocomplete="off" spellcheck="false" maxlength="256"></mdw-input>
+      <mdw-body size="small" ink="on-surface-variant" id="token-status"></mdw-body>
+      <mdw-card outlined><mdw-details summary="Forwarding settings (not active)"><mdw-box padding="16" gap="12">
+      <mdw-select outlined label="Saved forwarding destination" id="forward-action" name="forwardUrlAction">
         <option value="keep">Keep current setting</option>
         <option value="replace">Replace destination</option>
         <option value="clear">Remove destination</option>
-      </select>
-      <label for="forward-url">New HTTPS destination (only for Replace)</label>
-      <input id="forward-url" name="forwardUrl" type="url" maxlength="2048" autocomplete="off">
-      <p id="forward-status" class="muted"></p>
-      <p class="muted">Forwarding is not active. If enabled in a later release, it will send the original Ko-fi payment data to your destination, potentially including supporter email, private messages, and shipping information.</p>
-      <button id="save-settings" type="submit">Save settings</button>
-    </form>
-    <section id="kofi-prod" hidden>
-      <h2>Ko-fi webhook</h2>
-      <p>Webhook URL: <span id="kofi-prod-url"></span></p>
-      <p>Enter this URL on Ko-fi's webhook page. Test payments and real payments use the same URL and appear as entries below. No data is forwarded.</p>
-      <p id="kofi-role-status" role="status"></p>
-      <p id="kofi-webhook-status" role="status">No verified deliveries yet.</p>
-    </section>
-    </details>
-    <section id="kofi-entries" hidden>
-      <h2>Ko-fi entries</h2>
-      <p>Verified test and real payment receipts for your integration, newest first. Only qualifying subscription payments create renewable membership when role sync is enabled.</p>
-      <p id="kofi-entries-status" role="status">Loading entries…</p>
+      </mdw-select>
+      <mdw-input outlined label="New HTTPS destination" supporting="Only used when replacing the destination" id="forward-url" name="forwardUrl" type="url" maxlength="2048" autocomplete="off"></mdw-input>
+      <mdw-body size="small" ink="on-surface-variant" id="forward-status"></mdw-body>
+      <mdw-body size="small" ink="on-surface-variant">No payments are forwarded. If enabled later, your destination may receive supporter contact details and private messages.</mdw-body>
+      </mdw-box></mdw-details></mdw-card>
+      <mdw-box row x="start"><mdw-button id="save-settings" filled type="submit">Save settings</mdw-button></mdw-box>
+    </mdw-box></form>
+    <section id="kofi-prod" hidden><mdw-box gap="12">
+      <mdw-title size="large" role="heading" aria-level="2">Ko-fi webhook</mdw-title>
+      <mdw-body>Webhook URL: <mdw-body id="kofi-prod-url"></mdw-body></mdw-body>
+      <mdw-body ink="on-surface-variant">Paste this URL into your Ko-fi webhook settings, then send a test payment.</mdw-body>
+      <mdw-body id="kofi-role-status" role="status"></mdw-body>
+      <mdw-body id="kofi-webhook-status" role="status">No verified deliveries yet.</mdw-body>
+    </mdw-box></section>
+      </mdw-box>
+    </mdw-details></mdw-card>
+    <section id="kofi-entries" hidden><mdw-card outlined><mdw-details>
+      <mdw-box slot="summary" gap="4"><mdw-title>Payment history</mdw-title><mdw-body size="small" ink="on-surface-variant">Recent payments and Ko-fi tests</mdw-body></mdw-box>
+      <mdw-box padding="24" gap="12">
+      <!-- Only qualifying subscriptions renew membership when role sync is enabled. Receipts are listed newest first, including test deliveries. -->
+      <mdw-body id="kofi-entries-status" role="status">Loading entries…</mdw-body>
       <ul id="kofi-entries-list"></ul>
-      <button id="kofi-entries-more" type="button" hidden>Load older entries</button>
-    </section>
-  </main>
+      <mdw-button id="kofi-entries-more" outlined type="button" hidden>Load older entries</mdw-button>
+    </mdw-box></mdw-details></mdw-card></section>
+    </mdw-box>
+      </main>
+    </mdw-pane></mdw-page>
+  </mdw-root>
 </body>
 </html>

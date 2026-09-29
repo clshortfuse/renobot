@@ -12,3 +12,4 @@ export const errorPage = asset('error.html');
 export const notFoundPage = asset('not-found.html');
 export const siteCss = asset('site.css');
 export const siteJs = asset('site.js');
+export const materialJs = `${readFileSync(new URL('../node_modules/@shortfuse/materialdesignweb/dist/index.min.js', import.meta.url), 'utf8')}\n${asset('material-icons.js')}`;

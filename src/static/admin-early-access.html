@@ -6,37 +6,49 @@
   <meta name="color-scheme" content="dark">
   <title>Early-access review · Renobot</title>
   <link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/material.js?color=00a9c5&amp;lightness=dark&amp;resetCSS=false"></script>
   <script src="/assets/site.js" defer></script>
 </head>
 <body data-page="admin-early-access">
-  <main id="content">
-    <nav aria-label="Portal navigation"><a href="/app">← Portal</a></nav>
-    <p class="eyebrow">Owner dashboard</p>
-    <h1>Early-access review</h1>
-    <p>Review who earned access, their cumulative donation total, the periods earned, and which modders received each credited payment. Import historical receipts on demand, then approve each currently eligible person individually to queue their role. Import never grants roles. New payments are handled automatically. Recorded grants do not guarantee the role is currently present on Discord.</p>
-    <p id="early-access-status" role="status">Checking owner access…</p>
-    <button id="early-access-import" type="button" hidden>Import historical receipts</button>
-    <p id="early-access-import-status" role="status"></p>
-    <p id="early-access-approval-status" role="status"></p>
+  <a class="skip" href="#content">Skip to content</a>
+  <mdw-root>
+    <mdw-nav-drawer id="portal-drawer" slot="start" headline="Renobot" auto-open="1100" fixed-breakpoint="1100">
+      <nav id="portal-navigation" aria-label="Portal navigation" hidden>
+        <mdw-nav-drawer-item icon="dashboard" href="/app">Overview</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="favorite" href="/app/modder/kofi" id="kofi-link" hidden>Memberships</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="receipt_long" href="/app/admin/kofi" id="admin-kofi-link" hidden>Ko-fi activity</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="verified" href="/app/admin/early-access" id="admin-early-access-link" hidden active>Early-access review</mdw-nav-drawer-item>
+        <mdw-nav-drawer-item icon="home" href="/">Renobot home</mdw-nav-drawer-item>
+      </nav>
+    </mdw-nav-drawer>
+    <mdw-page><mdw-pane block>
+      <mdw-top-app-bar headline="Early access"><mdw-icon-button id="portal-menu" slot="leading" icon="menu" aria-label="Toggle navigation">Menu</mdw-icon-button></mdw-top-app-bar>
+      <main id="content" class="portal-content">
+    <mdw-box gap="16">
+    <mdw-label ink="primary">Owner workspace · Donations</mdw-label><mdw-headline size="large" role="heading" aria-level="1">Early-access review</mdw-headline><mdw-body>See who earned access, how long it lasts, and which payments qualify.</mdw-body>
+    <mdw-card outlined><mdw-details summary="How access works"><mdw-box padding="24"><mdw-body ink="on-surface-variant">Donations earn access time. Import past payments, review each supporter, then approve their role. Importing alone does not grant access.</mdw-body></mdw-box></mdw-details></mdw-card>
+    <mdw-body id="early-access-status" role="status">Checking owner access…</mdw-body>
+    <mdw-box row wrap gap="12"><mdw-button id="early-access-import" filled type="button" icon="download" hidden>Import historical receipts</mdw-button><mdw-button id="early-access-refresh" outlined type="button" icon="refresh">Refresh</mdw-button></mdw-box>
+    <mdw-body id="early-access-import-status" role="status"></mdw-body>
+    <mdw-body id="early-access-approval-status" role="status"></mdw-body>
     <section id="early-access-content" hidden>
-      <div class="membership-table-scroll" role="region" aria-label="Early-access members" tabindex="0">
-        <table class="membership-table">
-          <thead><tr><th scope="col">Discord user</th><th scope="col">Donated</th><th scope="col">Months earned</th><th scope="col">Access until</th><th scope="col">Role sync</th><th scope="col">Why</th><th scope="col">Approval</th></tr></thead>
-          <tbody id="early-access-list"></tbody>
-        </table>
-      </div>
-      <button id="early-access-more" type="button" hidden>Load more people</button>
-      <button id="early-access-refresh" type="button">Refresh</button>
-      <h2>Selected person</h2>
-      <p id="early-access-detail-status" role="status">Select Review payments to see periods and qualifying donations.</p>
+      <mdw-box gap="12"><mdw-label ink="primary">01 / Review queue</mdw-label><mdw-title size="large" role="heading" aria-level="2">People and access</mdw-title>
+      <div id="early-access-list" class="record-grid" role="list" aria-label="Early-access members"></div>
+      <mdw-button id="early-access-more" outlined type="button" hidden>Load more people</mdw-button>
+      <mdw-divider></mdw-divider><mdw-label ink="primary">02 / Payment history</mdw-label><mdw-title size="large" role="heading" aria-level="2">Selected person</mdw-title>
+      <mdw-body id="early-access-detail-status" role="status">Select Review payments to see periods and qualifying donations.</mdw-body>
       <div id="early-access-detail" hidden>
-        <h3>Access periods</h3>
+        <mdw-title role="heading" aria-level="3">Access periods</mdw-title>
         <ul id="early-access-periods"></ul>
-        <h3>Credited payments</h3>
+        <mdw-title role="heading" aria-level="3">Credited payments</mdw-title>
         <ul id="early-access-contributions"></ul>
-        <button id="early-access-contributions-more" type="button" hidden>Load more payments</button>
+        <mdw-button id="early-access-contributions-more" outlined type="button" hidden>Load more payments</mdw-button>
       </div>
+      </mdw-box>
     </section>
-  </main>
+    </mdw-box>
+      </main>
+    </mdw-pane></mdw-page>
+  </mdw-root>
 </body>
 </html>
