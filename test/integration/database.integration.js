@@ -54,6 +54,16 @@ describe('SQLite migrations and repositories', () => {
       assert.equal(await send(0, 'future', 1), 'accepted');
       const leases = await database.activeSupporterLeases(supporter, new Date(now));
       assert.equal(leases.length, 2);
+      const alphaMemberships = await database.listKofiMemberships(users[0]?.id ?? '', 'role');
+      assert.equal(alphaMemberships.members.length, 1);
+      assert.equal(alphaMemberships.members[0]?.discordUserId, supporter);
+      assert.equal(await database.hasKofiMembership(users[0]?.id ?? '', supporter), true);
+      assert.equal(await database.hasKofiMembership(users[0]?.id ?? '', discordId()), false);
+      assert.equal(alphaMemberships.members[0]?.roleManaged, false);
+      assert.ok(alphaMemberships.members[0]?.sync);
+      assert.equal((await database.listKofiMemberships(users[1]?.id ?? '', 'role')).members.length, 1);
+      assert.deepEqual(await database.listKofiMemberships(users[0]?.id ?? '', 'role', 'invalid'),
+        { members: [], nextCursor: null });
       assert.equal((await client.kofiEntitlement.findUniqueOrThrow({ where: {
         integrationId_discordUserId: { integrationId: integrations[0]?.id ?? '', discordUserId: supporter },
       } })).lastPaymentAt.toISOString(), new Date(now - 86400000).toISOString());
@@ -75,6 +85,8 @@ describe('SQLite migrations and repositories', () => {
       assert.equal(await reconcileSupporterRole(database, bot, 'guild', 'role', new Date(now + 60000)), true);
       assert.equal(grants, 1);
       assert.equal(await database.hasManagedSupporterRole(supporter, 'role'), true);
+      assert.equal((await database.listKofiMemberships(users[0]?.id ?? '', 'role')).members[0]?.roleManaged, true);
+      assert.equal((await database.listKofiMemberships(users[0]?.id ?? '', 'other-role')).members[0]?.roleManaged, false);
       assert.equal(await database.hasManagedSupporterRole(supporter, 'different-role'), false);
       await client.kofiEntitlement.update({ where: { integrationId_discordUserId: {
         integrationId: integrations[0]?.id ?? '', discordUserId: supporter,

@@ -1,3 +1,14 @@
+# Modder memberships
+
+The modder portal at `/app/modder/kofi` now leads with a paginated list of the
+creator's qualifying supporter leases, including last payment, expiry and
+Renobot's recorded role-grant/sync state. Refresh to check for worker progress;
+new verified receipts also refresh the list. These are durable ledger records,
+not a live Discord role check: the separate Check Discord role button queries
+Discord for that supporter on demand. Manually assigned roles are not tracked. Ko-fi
+webhook setup is a secondary expandable section; receipts remain available
+below it. Only the currently authorized modder may read their own memberships.
+
 # Renobot portal implementation plan
 
 ## Purpose

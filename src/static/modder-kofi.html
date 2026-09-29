@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Ko-fi settings · Renobot</title>
+  <title>Supporter memberships · Renobot</title>
   <link rel="stylesheet" href="/assets/site.css">
   <script src="/assets/site.js" defer></script>
 </head>
@@ -12,9 +12,24 @@
   <main id="content">
     <nav aria-label="Portal navigation"><a href="/app">← Portal</a></nav>
     <p class="eyebrow">Modder settings</p>
-    <h1>Ko-fi setup</h1>
-    <p>Save settings for your own integration. Verified Ko-fi deliveries, including Ko-fi test payments, are recorded as receipts. Forwarding is not active. Do not replace a working Ko-fi webhook until you are ready for this limitation.</p>
+    <h1>Supporter memberships</h1>
     <p id="settings-status" role="status">Checking access…</p>
+    <section id="kofi-memberships" hidden>
+      <h2>Membership status</h2>
+      <p>Expiry is based on the last qualifying payment. Renobot's recorded grant and sync work are distinct from the current Discord role. Use Check Discord role for a live lookup; manually assigned roles are not tracked by Renobot.</p>
+      <p id="kofi-memberships-status" role="status">Loading memberships…</p>
+      <div class="membership-table-scroll" role="region" aria-label="Supporter memberships" tabindex="0">
+        <table class="membership-table">
+          <thead><tr><th scope="col">Supporter</th><th scope="col">Membership</th><th scope="col">Last payment</th><th scope="col">Role sync</th><th scope="col">Discord role</th></tr></thead>
+          <tbody id="kofi-memberships-list"></tbody>
+        </table>
+      </div>
+      <button id="kofi-memberships-more" type="button" hidden>Load older memberships</button>
+      <button id="kofi-memberships-refresh" type="button">Refresh status</button>
+    </section>
+    <details id="kofi-setup">
+      <summary>Ko-fi setup and webhook</summary>
+      <p>Save settings for your own integration. Verified Ko-fi deliveries, including Ko-fi test payments, are recorded as receipts. Forwarding is not active. Do not replace a working Ko-fi webhook until you are ready for this limitation.</p>
     <form id="kofi-form" hidden>
       <label for="minimum-amount">Minimum monthly amount</label>
       <input id="minimum-amount" name="minimumAmount" type="number" min="0.01" max="100000" step="0.01" required>
@@ -43,6 +58,7 @@
       <p id="kofi-role-status" role="status"></p>
       <p id="kofi-webhook-status" role="status">No verified deliveries yet.</p>
     </section>
+    </details>
     <section id="kofi-entries" hidden>
       <h2>Ko-fi entries</h2>
       <p>Verified test and real payment receipts for your integration, newest first. Only qualifying subscription payments create renewable membership when role sync is enabled.</p>

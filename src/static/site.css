@@ -41,6 +41,21 @@ footer small{grid-column:1/-1}
 .status{display:flex;justify-content:space-between;gap:1rem;margin:2rem 0;padding:1rem;border:1px solid #ffffff1f;border-radius:.75rem;background:#080b1266}
 .badge{display:inline-block;padding:.25rem .6rem;border-radius:999px;background:#22d3ee29;color:#67e8f9;font-size:.85rem;font-weight:700}
 body>main:not(.site){width:min(100% - 3rem,48rem);margin:10vh auto;padding:clamp(2rem,6vw,4.5rem);border:1px solid #ffffff1f;border-radius:1.5rem;background:#111622e8;box-shadow:0 2rem 6rem #0008}
+body[data-page="modder-kofi"]>main{width:min(100% - 3rem,78rem)}
+.membership-table-scroll{overflow-x:auto;margin:1.25rem 0 1rem;border:1px solid #ffffff24;border-radius:.85rem}
+.membership-table-scroll:focus-visible{outline:2px solid #22d3ee;outline-offset:2px}
+.membership-table{width:100%;min-width:58rem;border-collapse:collapse;text-align:left;font-size:.9rem}
+.membership-table th{padding:.85rem 1rem;background:#1a2938;color:#dbe3ff;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.membership-table td{padding:1rem;vertical-align:top;border-top:1px solid #ffffff1f}
+.membership-table tbody tr:nth-child(even){background:#ffffff08}
+.membership-table tbody tr:hover{background:#22d3ee0c}
+.membership-table td:first-child{font-variant-numeric:tabular-nums;white-space:nowrap}
+.membership-table td:first-child strong{display:block;color:#eef2ff;font-variant-numeric:normal}
+.membership-table time{display:block;white-space:nowrap;color:#b8c0d9;font-variant-numeric:tabular-nums}
+.membership-table .membership-state{display:inline-block;padding:.2rem .65rem;border-radius:999px;background:#22d3ee26;color:#67e8f9;font-weight:700}
+.membership-table .membership-state.expired{background:#ffffff19;color:#b8c0d9}
+.membership-table .membership-detail{display:block;margin-top:.4rem;color:#929db9;font-size:.83rem}
+.membership-table button{padding:.5rem .75rem;white-space:nowrap;font-size:.82rem}
 form{margin:0}
 form#kofi-form{display:grid;gap:.65rem;margin-top:1.5rem}
 input,select{width:100%;padding:.7rem;border:1px solid #ffffff45;border-radius:.55rem;background:#080b12;color:#eef2ff;font:inherit}
