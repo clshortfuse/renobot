@@ -42,13 +42,16 @@ describe('SQLite migrations and repositories', () => {
         assert.equal(await receiveKofiReceipt(database, key, integration.endpointId,
           new URLSearchParams({ data: JSON.stringify(payload) }).toString(), undefined, '5.00'), 'accepted');
         assert.equal((await database.supporterAccount(supporter.id)).entries.length, days === 60 ? 0 : 1);
-        assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', false), { linked: 1, more: false });
+        assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 1, more: false });
         const leases = await database.activeSupporterLeases(supporter.id, new Date());
         assert.equal(leases.length, 0);
+        assert.equal((await database.supporterAccount(supporter.id)).balance, null);
+        assert.equal(await client.earlyAccessCredit.count({ where: { discordUserId: supporter.id } }), 0);
+        assert.equal(await client.earlyAccessPeriod.count({ where: { discordUserId: supporter.id } }), 0);
         assert.equal(await client.supporterRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
         assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
       }
-      assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', false), { linked: 0, more: false });
+      assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 0, more: false });
       assert.equal((await database.supporterAccount(supporter.id)).entries.length, 2);
     } finally {
       await client.supporterRoleSync.deleteMany({ where: { discordUserId: supporter.id } });
@@ -88,13 +91,13 @@ describe('SQLite migrations and repositories', () => {
           occurredAt: oldDate, receivedAt: oldDate, supporterEmail: email ?? null, supporterDiscordUserId: discord ?? null,
           outcome: 'recorded-no-entitlement' } });
       }
-      assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', true), { linked: 2, more: false });
-      assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', true), { linked: 0, more: false });
+      assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 2, more: false });
+      assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 0, more: false });
       const account = await database.supporterAccount(supporter.id);
       assert.equal(account.entries.length, 3);
-      assert.equal(account.balance?.totalAmount.toFixed(2), '10.00');
-      assert.ok(account.balance?.expiresAt && account.balance.expiresAt < new Date());
-      assert.equal(await client.earlyAccessCredit.count({ where: { discordUserId: supporter.id } }), 2);
+      assert.equal(account.balance, null);
+      assert.equal(await client.earlyAccessCredit.count({ where: { discordUserId: supporter.id } }), 0);
+      assert.equal(await client.earlyAccessPeriod.count({ where: { discordUserId: supporter.id } }), 0);
       assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
       const otherAccount = await database.supporterAccount(other.id);
       assert.equal(otherAccount.entries.length, 1);

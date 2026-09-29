@@ -14,7 +14,7 @@ export class MissingVerificationTokenError extends Error {}
  *   saveLogin: (user: { id: string, username: string }) => Promise<void>,
  *   verifyDiscordEmail: (discordUserId: string, email: string) => Promise<boolean>,
  *   supporterAccount: (discordUserId: string, before?: string) => Promise<{ emails: import('@prisma/client').AccountEmail[], balance: import('@prisma/client').EarlyAccessBalance | null, entries: (import('@prisma/client').KofiEvent & { integration: { account: { lastKnownUsername: string } } })[], nextCursor: string | null }>,
- *   linkEmailPayments: (discordUserId: string, currency: string, earlyAccessEnabled: boolean) => Promise<{ linked: number, more: boolean }>,
+ *   linkEmailPayments: (discordUserId: string) => Promise<{ linked: number, more: boolean }>,
  *   getIntegration: (discordUserId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   findIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   findEnabledIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
@@ -187,7 +187,7 @@ export function createPortalDatabase(client) {
       const entries = rows.slice(0, 50);
       return { emails, balance, entries, nextCursor: rows.length > 50 ? entries.at(-1)?.id ?? null : null };
     },
-    async linkEmailPayments(discordUserId, currency, earlyAccessEnabled) {
+    async linkEmailPayments(discordUserId) {
       return client.$transaction(async (tx) => {
         const emails = await tx.accountEmail.findMany({ where: { account: { discordUserId } }, select: { email: true } });
         const rows = await tx.kofiEvent.findMany({ where: { supporterDiscordUserId: null,
@@ -199,12 +199,6 @@ export function createPortalDatabase(client) {
             data: { supporterDiscordUserId: discordUserId } });
           if (!changed.count) continue;
           linked++;
-          const linkedEvent = { ...event, supporterDiscordUserId: discordUserId };
-          // Historical attribution never starts a fresh access period or bypasses owner approval.
-          if (earlyAccessEnabled && event.currency === currency && ['Donation', 'Subscription'].includes(event.eventType)
-            && event.occurredAt.getTime() <= event.receivedAt.getTime() + 5 * 60_000) {
-            await creditEarlyAccess(tx, linkedEvent, event.receivedAt, false);
-          }
         }
         return { linked, more: rows.length > 50 };
       });

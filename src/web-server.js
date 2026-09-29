@@ -106,9 +106,7 @@ export function createWebServer(options) {
           if (!verifyCsrfToken(body.get('csrf') ?? '', token ?? '', options.config.sessionSecret)) {
             sendJson(response, 403, { error: 'Invalid CSRF token' }); return;
           }
-          if (!options.settingsConfig) { sendJson(response, 503, { error: 'Please try again later' }); return; }
-          sendJson(response, 200, await options.database.linkEmailPayments(session.id, options.settingsConfig.currency,
-            Boolean(options.earlyAccessRoleId)));
+          sendJson(response, 200, await options.database.linkEmailPayments(session.id));
           return;
         }
         const before = url.searchParams.get('before') ?? undefined;

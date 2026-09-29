@@ -8,7 +8,7 @@ Verification by emailed link, SMTP setup, and arbitrary-address verification are
 
 **Find my payments** checks all verified addresses and attaches matching unassigned receipts to the signed-in Discord user. Payments already linked to that Discord ID are always visible, even without a verified email. Payments linked to someone else are never reassigned. Matching is explicit and can be repeated safely; it processes batches of 50 receipts.
 
-Historical Early Access credits retain the original receipt date for owner review. Linking does not create subscription entitlements or queue any role changes. Retroactive role application remains a manual owner decision. Existing live-payment behavior is unchanged.
+Linking is attribution-only and preserves original receipt dates. It does not create Early Access credits, balances, or periods, create subscription entitlements, or queue any role changes. Historical crediting and retroactive role application remain separate owner-controlled actions. Existing live-payment behavior is unchanged.
 
 ## Storage and deployment
 
