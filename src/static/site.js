@@ -48,6 +48,8 @@ async function loadSession() {
       const status = element('early-access-status');
       const approvalStatus = element('early-access-approval-status');
       const content = element('early-access-content');
+      const importButton = /** @type {HTMLButtonElement} */ (element('early-access-import'));
+      const importStatus = element('early-access-import-status');
       const more = /** @type {HTMLButtonElement} */ (element('early-access-more'));
       const paymentsMore = /** @type {HTMLButtonElement} */ (element('early-access-contributions-more'));
       /** @type {string | null} */
@@ -130,6 +132,7 @@ async function loadSession() {
           cursor = result.nextCursor;
           more.hidden = !cursor;
           content.hidden = false;
+          importButton.hidden = !result.enabled;
           status.textContent = result.enabled
             ? 'Recorded access and grants are shown below. Role presence on Discord is not checked live.'
             : 'Early-access role sync is disabled; stored credits are shown below.';
@@ -174,6 +177,33 @@ async function loadSession() {
       more.addEventListener('click', () => { if (cursor && !more.disabled) void loadPeople(false); });
       paymentsMore.addEventListener('click', () => { if (selected && paymentCursor && !paymentsMore.disabled) void loadDetail(selected, false); });
       element('early-access-refresh').addEventListener('click', () => { void loadPeople(true); });
+      importButton.addEventListener('click', () => {
+        if (importButton.disabled) return;
+        importButton.disabled = true;
+        void (async () => {
+          let scanned = 0;
+          /** @type {string | null} */
+          let after = null;
+          try {
+            do {
+              const body = new URLSearchParams({ csrf: session.csrf });
+              if (after) body.set('after', after);
+              const response = await fetch('/app/api/admin/early-access/import', {
+                method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
+              });
+              if (!response.ok) throw new Error('Import unavailable');
+              /** @type {{ scanned: number, nextCursor: string | null }} */
+              const result = await response.json();
+              scanned += result.scanned;
+              after = result.nextCursor;
+              importStatus.textContent = `Scanned ${scanned} historical receipts; importing…`;
+            } while (after);
+            importStatus.textContent = `Historical import scanned ${scanned} receipts. Review each person before approving a role.`;
+            await loadPeople(true);
+          } catch { importStatus.textContent = 'Import interrupted. Run it again to safely resume; existing credits are not duplicated.'; }
+          finally { importButton.disabled = false; }
+        })();
+      });
       await loadPeople(true);
     } else if (page === 'admin-kofi') {
       const status = element('admin-kofi-status');

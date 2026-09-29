@@ -17,10 +17,11 @@ Verified Ko-fi Donation and Subscription receipts from any modder integration
 with a linked Discord ID add to a shared balance in the configured currency.
 Each complete $5 earns one calendar month of early access, with leftover funds
 carried forward even if access lapses. New months extend active access or start
-on the next payment after expiry. Historical verified receipts are replayed in
-receipt order when the role is enabled; each receipt is credited only once
-across restarts. Replay populates the review ledger but does not queue role
-grants. The owner reviews each person's payments and individually approves a
+on the next payment after expiry. The owner can explicitly import historical
+verified receipts from the review page in bounded batches; startup does not
+replay them. Receipts are credited in receipt order only once across imports.
+Import populates the review ledger but does not queue role grants. The owner
+reviews each person's payments and individually approves a
 currently active period to queue role sync. Expired periods cannot be approved;
 new verified payments continue to queue role sync automatically. The known
 test Discord ID `012345678901234567` is hardcoded as ineligible: its

@@ -140,6 +140,47 @@ describe('dashboard routes', () => {
       `${base}/app/api/admin/early-access/23456789012345678/approve`)).status, 409);
     assert.deepEqual(approved, ['12345678901234567', '23456789012345678']);
   });
+  it('lets the owner import historical receipts only on demand with CSRF and a bounded cursor', async () => {
+    /** @type {(value: void) => void} */
+    let release = () => {};
+    /** @type {(value: void) => void} */
+    let started = () => {};
+    const entered = new Promise((resolve) => { started = resolve; });
+    const hold = new Promise((resolve) => { release = resolve; });
+    /** @type {(string | undefined)[]} */
+    const calls = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      backfillEarlyAccess: async (/** @type {string} */ currency, /** @type {string | undefined} */ after) => {
+        assert.equal(currency, 'USD');
+        calls.push(after);
+        if (!after) { started(); await hold; }
+        return after === 'badCursor' ? null : { scanned: after ? 1 : 50, nextCursor: after ? null : 'receiptCursor' };
+      },
+    }));
+    const base = await startServer({ database, earlyAccessRoleId: '1554515217751216185',
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const url = `${base}/app/api/admin/early-access/import`;
+    const owner = createSession({ id: 'owner', username: 'owner' }, secret);
+    const member = createSession({ id: 'member', username: 'member' }, secret);
+    const post = (/** @type {string | undefined} */ token, /** @type {string} */ csrf,
+      /** @type {string | undefined} */ after = undefined) => fetch(url, { method: 'POST', headers: {
+        'Content-Type': 'application/x-www-form-urlencoded', ...(token ? { Cookie: `renobot_session=${token}` } : {}),
+      }, body: new URLSearchParams({ csrf, ...(after === undefined ? {} : { after }) }) });
+    assert.equal((await post(undefined, '')).status, 401);
+    assert.equal((await post(member, csrfToken(member, secret))).status, 403);
+    assert.equal((await post(owner, 'bad')).status, 403);
+    assert.equal((await post(owner, csrfToken(owner, secret), 'bad!')).status, 400);
+    assert.deepEqual(calls, []);
+    const first = post(owner, csrfToken(owner, secret));
+    await entered;
+    assert.equal((await post(owner, csrfToken(owner, secret))).status, 409);
+    release();
+    assert.deepEqual(await (await first).json(), { scanned: 50, nextCursor: 'receiptCursor' });
+    assert.deepEqual(await (await post(owner, csrfToken(owner, secret), 'receiptCursor')).json(),
+      { scanned: 1, nextCursor: null });
+    assert.equal((await post(owner, csrfToken(owner, secret), 'badCursor')).status, 400);
+    assert.deepEqual(calls, [undefined, 'receiptCursor', 'badCursor']);
+  });
   it('reports Discord readiness without exposing a cacheable response', async () => {
     const baseUrl = await startServer({ ready: false });
     const response = await fetch(`${baseUrl}/health`);
