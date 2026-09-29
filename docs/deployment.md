@@ -182,9 +182,10 @@ if desired, then configure these environment secrets:
 | `DEPLOY_SSH_KEY` | Private SSH key for that account. |
 | `DEPLOY_HOST_KEY` | Pinned `known_hosts` line for the host and selected port. |
 
-Optional **environment variable** (not a secret): `KOFI_TEST_MODE`. It must be
-exactly `true` or `false`; missing defaults to `false`. The deploy step validates
-it, passes only that literal value over SSH, and stores it in the private
+Optional `KOFI_TEST_MODE` in the `production` environment variables **or**
+environment secrets. It must be exactly `true` or `false`; missing defaults to
+`false`. If both are set, their values must agree. The deploy step logs which
+source was used, validates the value, passes only that literal over SSH, and stores it in the private
 deployment Compose environment file (not in Git). Compose explicitly overrides
 any `KOFI_TEST_MODE` entry in the host runtime env file. Deployment rollback
 restores the prior setting. This does not configure a separate staging host.

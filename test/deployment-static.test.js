@@ -45,8 +45,11 @@ describe('public static deployment', () => {
 
   it('passes only validated GitHub environment test mode into Compose and restores it on rollback', () => {
     assert.match(workflow, /environment: production/u);
-    assert.match(workflow, /KOFI_TEST_MODE: \$\{\{ vars\.KOFI_TEST_MODE \}\}/u);
-    assert.match(workflow, /mode=\$\{KOFI_TEST_MODE:-false\}/u);
+    assert.match(workflow, /KOFI_TEST_MODE_VARIABLE: \$\{\{ vars\.KOFI_TEST_MODE \}\}/u);
+    assert.match(workflow, /KOFI_TEST_MODE_SECRET: \$\{\{ secrets\.KOFI_TEST_MODE \}\}/u);
+    assert.match(workflow, /"\$KOFI_TEST_MODE_VARIABLE" != "\$KOFI_TEST_MODE_SECRET"/u);
+    assert.match(workflow, /mode=\$\{KOFI_TEST_MODE_VARIABLE:-\$\{KOFI_TEST_MODE_SECRET:-false\}\}/u);
+    assert.match(workflow, /Ko-fi test mode is not configured; defaulting to false/u);
     assert.match(workflow, /"\$mode" != true && "\$mode" != false/u);
     assert.match(workflow, /printf '%s\\n' "\$KOFI_ENCRYPTION_KEY" \| ssh production \/opt\/renobot\/deploy\.sh "\$IMAGE" "\$mode"/u);
     assert.match(deploy, /"\$\{2:-false\}" != true && "\$\{2:-false\}" != false/u);

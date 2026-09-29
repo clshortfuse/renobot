@@ -186,7 +186,8 @@ export function createWebServer(options) {
           const integration = await options.database.getIntegration(session.id);
           sendJson(response, 200, { configured: Boolean(integration), minimumAmount: integration?.minimumAmount.toFixed(2)
             ?? options.settingsConfig.minimumAmount, currency: options.settingsConfig.currency,
-          floor: options.settingsConfig.minimumAmount, hasVerificationToken: Boolean(integration?.verificationTokenCiphertext),
+          floor: options.settingsConfig.minimumAmount, testModeEnabled: options.config.kofiTestMode,
+          hasVerificationToken: Boolean(integration?.verificationTokenCiphertext),
           hasForwardUrl: Boolean(integration?.forwardUrlCiphertext), active: false,
           testUrl: options.config.kofiTestMode && integration
             ? new URL(`/test/kofi/${integration.endpointId}`, options.config.publicBaseUrl).href : null,

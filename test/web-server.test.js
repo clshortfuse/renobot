@@ -203,11 +203,15 @@ describe('dashboard routes', () => {
     assert.equal((await fetch(`${baseUrl}/app/api/modder/kofi/events`, { headers: cookie })).status, 404);
     const status = await fetch(`${baseUrl}/app/api/modder/kofi`, { headers: cookie });
     assert.equal(status.status, 200);
-    assert.equal((await status.json()).testUrl, null);
+    const disabled = await status.json();
+    assert.equal(disabled.testModeEnabled, false);
+    assert.equal(disabled.testUrl, null);
     const stagingUrl = await startServer({ database, config: { ...config, kofiTestMode: true },
       settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
     const stagingStatus = await fetch(`${stagingUrl}/app/api/modder/kofi`, { headers: cookie });
-    assert.equal((await stagingStatus.json()).testUrl, `https://renobot.example/test/kofi/${endpointId}`);
+    const enabled = await stagingStatus.json();
+    assert.equal(enabled.testModeEnabled, true);
+    assert.equal(enabled.testUrl, `https://renobot.example/test/kofi/${endpointId}`);
   });
 
   it('streams only verified test summaries to the current authorized integration owner', async () => {
@@ -309,7 +313,7 @@ describe('dashboard routes', () => {
     const saved = await post(data);
     assert.equal(saved.status, 200);
     assert.deepEqual(await saved.json(), { configured: false, minimumAmount: '5.00', currency: 'USD',
-      floor: '5.00', hasVerificationToken: false, hasForwardUrl: false, active: false,
+      floor: '5.00', testModeEnabled: false, hasVerificationToken: false, hasForwardUrl: false, active: false,
       testUrl: null, lastTestAt: null });
     assert.equal(writes.length, 1);
     assert.deepEqual(/** @type {any} */ (writes[0]).user, { id: 'member', username: 'member' });
@@ -356,7 +360,7 @@ describe('dashboard routes', () => {
     const result = await fetch(`${baseUrl}/app/api/modder/kofi`, { headers: cookie });
     assert.equal(result.status, 200);
     assert.deepEqual(await result.json(), { configured: true, minimumAmount: '7.50', currency: 'USD',
-      floor: '5.00', hasVerificationToken: true, hasForwardUrl: true, active: false,
+      floor: '5.00', testModeEnabled: false, hasVerificationToken: true, hasForwardUrl: true, active: false,
       testUrl: null, lastTestAt: null });
   });
 
