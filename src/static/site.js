@@ -47,7 +47,7 @@ async function loadSession() {
       const form = /** @type {HTMLFormElement} */ (element('kofi-form'));
       /** @type {EventSource | undefined} */
       let events;
-      /** @param {{ minimumAmount: string, currency: string, floor: string,
+      /** @param {{ minimumAmount: string, currency: string, floor: string, testModeEnabled: boolean,
        *   hasVerificationToken: boolean, hasForwardUrl: boolean, testUrl: string | null, lastTestAt: string | null }} settings */
       const showSettings = (settings) => {
         /** @type {HTMLInputElement} */ (element('minimum-amount')).value = settings.minimumAmount;
@@ -55,6 +55,12 @@ async function loadSession() {
         element('floor-note').textContent = `Minimum allowed: ${settings.floor} ${settings.currency}`;
         element('token-status').textContent = settings.hasVerificationToken ? 'Token configured (value hidden)' : 'Token not yet configured';
         element('forward-status').textContent = settings.hasForwardUrl ? 'Destination configured (value hidden)' : 'No forwarding destination';
+        element('test-setup').hidden = false;
+        element('test-setup-status').textContent = !settings.testModeEnabled
+          ? 'Test deliveries are disabled on this deployment. An administrator must enable Ko-fi test mode and redeploy before a test URL can appear. You can save settings now.'
+          : !settings.hasVerificationToken
+            ? 'Test mode is enabled. Enter your Ko-fi verification token above and save settings to create your test-only URL.'
+            : 'Test mode is enabled. Your test-only URL is below. It is not a production payment webhook.';
         element('kofi-test').hidden = !settings.testUrl;
         element('kofi-test-url').textContent = settings.testUrl;
         element('kofi-test-status').textContent = settings.lastTestAt

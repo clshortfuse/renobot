@@ -36,10 +36,15 @@
       <p class="muted">Forwarding is not active. If enabled in a later release, it will send the original Ko-fi payment data to your destination, potentially including supporter email, private messages, and shipping information.</p>
       <button id="save-settings" type="submit">Save settings</button>
     </form>
+    <section id="test-setup" aria-labelledby="test-setup-heading" hidden>
+      <h2 id="test-setup-heading">Test delivery setup</h2>
+      <p id="test-setup-status" role="status">Checking test availability…</p>
+    </section>
     <section id="kofi-test" hidden>
       <h2>Test delivery only</h2>
       <p>This URL verifies a Ko-fi-format delivery and discards it. It never processes payments, grants roles, or forwards data. Do not replace an existing live Ko-fi webhook with this URL. If Ko-fi's tester requires changing your only webhook destination, wait until production activation is available.</p>
-      <p>Test URL: <span id="kofi-test-url"></span></p>
+      <p>Copy this test-only URL for a delivery from an owner-controlled Ko-fi creator (only if its tester accepts a separate destination): <span id="kofi-test-url"></span></p>
+      <p>Keep this page open while sending the test delivery. A verified result appears below automatically; refreshing the page retains the last verified timestamp.</p>
       <p id="kofi-test-status" role="status">No verified test delivery yet.</p>
       <p id="kofi-test-details" class="muted" role="status"></p>
     </section>

@@ -104,7 +104,8 @@ describe('static portal assets', () => {
   it('renders own modder settings and the test-only URL as DOM text without stored secrets', async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'kofi-form', 'minimum-amount', 'currency',
-      'floor-note', 'token-status', 'forward-status', 'kofi-test', 'kofi-test-url', 'kofi-test-status', 'kofi-test-details']
+      'floor-note', 'token-status', 'forward-status', 'test-setup', 'test-setup-status',
+      'kofi-test', 'kofi-test-url', 'kofi-test-status', 'kofi-test-details']
       .map((id) => [id, { hidden: true, value: '' }]));
     nodes['kofi-form'] = { hidden: true, addEventListener() {} };
     /** @type {((event: { data: string }) => void) | undefined} */
@@ -119,10 +120,13 @@ describe('static portal assets', () => {
       },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
         ? { username: '<script>', csrf: 'secret-csrf' }
-        : { minimumAmount: '5.00', currency: 'USD', floor: '5.00', hasVerificationToken: true, hasForwardUrl: true,
+        : { minimumAmount: '5.00', currency: 'USD', floor: '5.00', testModeEnabled: true,
+          hasVerificationToken: true, hasForwardUrl: true,
           testUrl: 'https://renobot.example/test/kofi/private-id', lastTestAt: null } }),
     });
     assert.equal(nodes['kofi-form'].hidden, false);
+    assert.equal(nodes['test-setup'].hidden, false);
+    assert.match(nodes['test-setup-status'].textContent, /Your test-only URL is below/u);
     assert.equal(nodes['token-status'].textContent, 'Token configured (value hidden)');
     assert.equal(nodes['forward-status'].textContent, 'Destination configured (value hidden)');
     assert.equal(nodes['floor-note'].textContent, 'Minimum allowed: 5.00 USD');
@@ -136,10 +140,37 @@ describe('static portal assets', () => {
     assert.doesNotMatch(modderKofiPage, /value="(?:v1:|secret)|webhooks\/kofi/u);
   });
 
+  it('explains why a Ko-fi test URL is missing without exposing a disabled endpoint', async () => {
+    /** @type {[boolean, boolean, RegExp][]} */
+    const cases = [
+      [false, true, /disabled on this deployment.*redeploy/u],
+      [true, false, /Enter your Ko-fi verification token.*save settings/u],
+    ];
+    for (const [enabled, hasToken, expected] of cases) {
+      /** @type {Record<string, any>} */
+      const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
+        'token-status', 'forward-status', 'test-setup', 'test-setup-status', 'kofi-test',
+        'kofi-test-url', 'kofi-test-status', 'kofi-test-details'].map((id) => [id, { hidden: true }]));
+      nodes['kofi-form'] = { hidden: true, addEventListener() {} };
+      await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
+        document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id] },
+        fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
+          ? { username: 'owner', csrf: 'csrf' }
+          : { minimumAmount: '5.00', currency: 'USD', floor: '5.00', testModeEnabled: enabled,
+            hasVerificationToken: hasToken, hasForwardUrl: false, testUrl: null, lastTestAt: null } }),
+      });
+      assert.equal(nodes['test-setup'].hidden, false);
+      assert.match(nodes['test-setup-status'].textContent, expected);
+      assert.equal(nodes['kofi-test'].hidden, true);
+      assert.equal(nodes['kofi-test-url'].textContent, null);
+    }
+  });
+
   it('submits the authenticated settings form without leaving secrets in browser fields', async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
-      'token-status', 'forward-status', 'verification-token', 'forward-action', 'forward-url', 'save-settings',
+      'token-status', 'forward-status', 'test-setup', 'test-setup-status',
+      'verification-token', 'forward-action', 'forward-url', 'save-settings',
       'kofi-test', 'kofi-test-url', 'kofi-test-status', 'kofi-test-details']
       .map((id) => [id, { value: '', hidden: true, disabled: false }]));
     /** @type {((event: { preventDefault: () => void }) => void) | undefined} */
@@ -149,7 +180,8 @@ describe('static portal assets', () => {
     } };
     /** @type {URLSearchParams | undefined} */
     let posted;
-    const settings = { minimumAmount: '5.00', currency: 'USD', floor: '5.00', hasVerificationToken: false, hasForwardUrl: false,
+    const settings = { minimumAmount: '5.00', currency: 'USD', floor: '5.00', testModeEnabled: true,
+      hasVerificationToken: false, hasForwardUrl: false,
       testUrl: null };
     let streams = 0;
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
@@ -168,6 +200,7 @@ describe('static portal assets', () => {
     });
     assert.ok(submit);
     assert.equal(streams, 0);
+    assert.match(nodes['test-setup-status'].textContent, /Enter your Ko-fi verification token/u);
     nodes['verification-token'].value = 'private-value';
     nodes['forward-action'].value = 'replace';
     nodes['forward-url'].value = 'https://example.com/hook';
@@ -183,6 +216,7 @@ describe('static portal assets', () => {
     assert.equal(nodes['settings-status'].textContent, 'Settings saved. Webhooks remain inactive.');
     assert.equal(streams, 1);
     assert.equal(nodes['kofi-test'].hidden, false);
+    assert.match(nodes['test-setup-status'].textContent, /Your test-only URL is below/u);
     submit({ preventDefault() {} });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(streams, 1);
