@@ -23,3 +23,15 @@ jobs:
         run: npm ci
       - name: Validate project
         run: npm run check
+
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Apply migrations and run SQLite integration tests
+        run: npm run db:test

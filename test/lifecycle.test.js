@@ -66,6 +66,22 @@ describe('process lifecycle', () => {
       'close failed',
     );
   });
+
+  it('disconnects persistence exactly once even if bot shutdown fails', async () => {
+    let disconnects = 0;
+    const { logger } = createCapturingLogger();
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      disconnect: async () => { disconnects += 1; },
+    }));
+    const shutDown = createShutdown({
+      client: { destroy: async () => { throw new Error('bot failed'); } },
+      database,
+      logger,
+      setExitCode: () => {},
+    });
+    await Promise.all([shutDown('SIGTERM'), shutDown('SIGINT')]);
+    assert.equal(disconnects, 1);
+  });
 });
 
 /**

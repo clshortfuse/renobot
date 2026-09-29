@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Renobot</title>
+  <link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/site.js" defer></script>
+</head>
+<body data-page="app">
+  <main id="content">
+    <h1>Renobot</h1>
+    <p>Signed in as <strong id="username">Loading…</strong>.</p>
+    <div class="status"><span>Discord connection</span><strong id="connection">Loading…</strong></div>
+    <nav id="portal-navigation" aria-label="Portal navigation" hidden>
+      <a href="/">Home</a>
+      <a href="/app" aria-current="page">Portal</a>
+      <a href="/app/modder/kofi" id="kofi-link" hidden>Ko-fi settings</a>
+    </nav>
+    <p class="badge" id="owner-badge" hidden>Owner access</p>
+    <p class="badge" id="modder-badge" hidden>Modder access</p>
+    <p class="badge" id="reviewer-badge" hidden>Review access</p>
+    <p id="access-status" role="status" hidden>Access information is temporarily unavailable.</p>
+    <div class="actions">
+      <form method="post" action="/auth/logout">
+        <input type="hidden" name="csrf" id="csrf">
+        <button type="submit" id="sign-out" disabled>Sign out</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

@@ -9,8 +9,15 @@ services:
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: 3000
       NODE_ENV: production
+      KOFI_TEST_MODE: ${KOFI_TEST_MODE:-false}
     ports:
       - 127.0.0.1:3000:3000
+    volumes:
+      - type: bind
+        source: /opt/renobot/data
+        target: /data
+        bind:
+          create_host_path: false
     read_only: true
     tmpfs:
       - /tmp:size=32m,mode=1777

@@ -9,3 +9,8 @@ docs
 node_modules
 test
 *.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+data

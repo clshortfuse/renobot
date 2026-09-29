@@ -6,8 +6,8 @@ configured server and are owner-only except for authorized `/pin` and
 the separate `/summarize` command sends explicitly supplied text or a JSONL
 file to a configurable OpenAI-compatible model endpoint.
 
-For a portable Docker Compose deployment with GHCR, Nginx, and the owner-only
-Discord OAuth dashboard, see [Deployment](docs/deployment.md).
+For a portable Docker Compose deployment with GHCR, Nginx, and the Discord
+OAuth web application, see [Deployment](docs/deployment.md).
 
 ## Technology
 
@@ -59,16 +59,20 @@ Copy `.env.example` to `.env` and configure:
 | `DISCORD_GUILD_ID` | RenoDX server ID; commands are registered only here. |
 | `DISCORD_OWNER_USER_ID` | User allowed to execute owner-only commands; also allowed to summarize. |
 | `DISCORD_SUMMARIZE_ROLE_ID` | Optional role allowed to use `/summarize` in the configured server. |
+| `DISCORD_MODDER_ROLE_ID` / `DISCORD_MODERATOR_ROLE_ID` | Optional guild roles; the modder role gates Ko-fi settings, while appeals remain unavailable. |
 | `DISCORD_MESSAGE_CONTENT_INTENT` | Request approved Message Content access; defaults to `false`. |
 | `REVIEW_INCLUDE_BOTS` | Include other bots' messages; defaults to `false`. Renobot's own messages are always excluded. |
 | `REVIEW_LOOKBACK_DAYS` | Collection period from 1 through 30 days; defaults to `7`. |
 | `REVIEW_MAX_MESSAGES` | Global collection limit from 1 through 10,000 messages; defaults to `2500`. |
 | `LOG_LEVEL` | Pino log level; defaults to `info`. |
-| `DISCORD_CLIENT_SECRET` | OAuth client secret; enables the dashboard only when all dashboard settings are present. |
-| `PUBLIC_BASE_URL` | HTTPS dashboard origin, such as `https://renobot.renodx.com/`. |
+| `DISCORD_CLIENT_SECRET` | OAuth client secret; enables the website only when all web settings are present. |
+| `PUBLIC_BASE_URL` | HTTPS website origin, such as `https://renobot.renodx.com/`. |
 | `SESSION_SECRET` | At least 32 random bytes used to authenticate OAuth state and sessions. |
-| `HTTP_HOST` / `HTTP_PORT` | Private dashboard listener; Compose uses `0.0.0.0:3000` inside the container. |
-| `DATABASE_URL` | Reserved for future PostgreSQL persistence; currently unused. |
+| `HTTP_HOST` / `HTTP_PORT` | Private HTTP listener; Compose uses `0.0.0.0:3000` inside the container. |
+| `DATABASE_URL` | SQLite file for account persistence and modder Ko-fi settings (`file:/data/renobot.db` on the host volume); migrations must be applied before use. |
+| `KOFI_ENCRYPTION_KEY` | Separate 32-byte base64 AES-GCM key for encrypted settings; never store it in the database. |
+| `SUPPORTER_MINIMUM_AMOUNT` / `SUPPORTER_CURRENCY` | Owner-controlled minimum recurring amount and single supported currency; required with the encryption key to enable modder settings. |
+| `KOFI_TEST_MODE` | Defaults to `false`. Set `true` on owner-controlled HTTPS staging with database and Ko-fi settings to expose verification-and-discard test URLs and modder SSE status; never grants roles or activates payment handling. |
 
 Keep `.env` private. It is excluded from Git.
 

@@ -22,4 +22,8 @@ export default defineConfig([
       'prefer-template': 'error',
     },
   },
+  {
+    files: ['src/static/**/*.js'],
+    languageOptions: { globals: globals.browser },
+  },
 ]);

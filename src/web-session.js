@@ -1,15 +1,30 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-/** @param {string} secret @param {number} now */
-export function createOAuthState(secret, now = Date.now()) {
-  return sign({ expiresAt: now + 10 * 60_000, nonce: randomBytes(24).toString('base64url') }, secret);
+/** @param {string} secret @param {number} now @param {string} returnTo */
+export function createOAuthState(secret, now = Date.now(), returnTo = '/app') {
+  return sign({ expiresAt: now + 10 * 60_000, nonce: randomBytes(24).toString('base64url'), returnTo }, secret);
 }
 
 /** @param {string} token @param {string} secret @param {number} now */
 export function verifyOAuthState(token, secret, now = Date.now()) {
   const value = verify(token, secret);
   return Boolean(value && typeof value.nonce === 'string'
-    && typeof value.expiresAt === 'number' && value.expiresAt >= now);
+    && typeof value.expiresAt === 'number' && value.expiresAt >= now
+    && typeof value.returnTo === 'string' && safeAppPath(value.returnTo));
+}
+
+/** @param {string} token @param {string} secret */
+export function oauthReturnTo(token, secret) {
+  const value = verify(token, secret);
+  return value && typeof value.returnTo === 'string' && safeAppPath(value.returnTo)
+    ? value.returnTo : '/app';
+}
+
+/** @param {string} path */
+export function safeAppPath(path) {
+  return (path === '/app' || path.startsWith('/app/'))
+    && /^\/[A-Za-z0-9/_-]+$/u.test(path)
+    && !path.split('/').some((part) => part === '.' || part === '..');
 }
 
 /** @param {{ id: string, username: string }} user @param {string} secret @param {number} now */
@@ -69,4 +84,16 @@ function verify(token, secret) {
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 function isRecord(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+/** @param {string} sessionToken @param {string} secret */
+export function csrfToken(sessionToken, secret) {
+  return createHmac('sha256', secret).update('csrf:').update(sessionToken).digest('base64url');
+}
+
+/** @param {string} supplied @param {string} sessionToken @param {string} secret */
+export function verifyCsrfToken(supplied, sessionToken, secret) {
+  const expected = Buffer.from(csrfToken(sessionToken, secret));
+  const candidate = Buffer.from(supplied);
+  return candidate.length === expected.length && timingSafeEqual(candidate, expected);
 }
