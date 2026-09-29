@@ -13,15 +13,30 @@
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
     "commands:register": "node --env-file-if-exists=.env scripts/register-commands.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:test": "node scripts/run-db-integration.js",
+    "db:validate": "prisma validate",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "pretypecheck": "prisma generate",
     "typecheck": "tsc",
-    "test": "node --test",
+    "test": "node --test \"test/*.test.js\"",
     "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
+    "@prisma/client": "6.19.3",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "discord.js": "^14.27.0",
-    "pino": "^10.3.1"
+    "pino": "^10.3.1",
+    "prisma": "6.19.3"
+  },
+  "overrides": {
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.2"
+    }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

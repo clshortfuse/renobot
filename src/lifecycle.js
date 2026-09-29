@@ -3,6 +3,7 @@
  *   client: Pick<import('discord.js').Client, 'destroy'>,
  *   logger: import('pino').Logger,
  *   webServer?: import('node:http').Server,
+ *   database?: import('./database.js').PortalDatabase,
  *   setExitCode?: (exitCode: number) => void,
  * }>} ShutdownOptions
  */
@@ -35,6 +36,13 @@ export function createShutdown(options) {
       } catch (error) {
         setExitCode(1);
         options.logger.error({ err: error, reason }, 'Renobot shutdown failed');
+      } finally {
+        try {
+          await options.database?.disconnect();
+        } catch (error) {
+          setExitCode(1);
+          options.logger.error({ err: error, reason }, 'Renobot database shutdown failed');
+        }
       }
     })();
 

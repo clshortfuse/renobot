@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Ko-fi settings · Renobot</title>
+  <link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/site.js" defer></script>
+</head>
+<body data-page="modder-kofi">
+  <main id="content">
+    <nav aria-label="Portal navigation"><a href="/app">← Portal</a></nav>
+    <p class="eyebrow">Modder settings</p>
+    <h1>Ko-fi setup</h1>
+    <p>Save settings for your own integration. Payment processing and supporter roles are not active yet. Do not change your Ko-fi webhook destination.</p>
+    <p id="settings-status" role="status">Checking access…</p>
+    <form id="kofi-form" hidden>
+      <label for="minimum-amount">Minimum monthly amount</label>
+      <input id="minimum-amount" name="minimumAmount" type="number" min="0.01" max="100000" step="0.01" required>
+      <p id="floor-note" class="muted"></p>
+      <label for="currency">Currency</label>
+      <input id="currency" name="currency" readonly required>
+      <label for="verification-token">Ko-fi verification token (leave blank to keep the current token)</label>
+      <input id="verification-token" name="verificationToken" type="password" autocomplete="new-password" maxlength="256">
+      <p id="token-status" class="muted"></p>
+      <label for="forward-action">Courtesy forwarding</label>
+      <select id="forward-action" name="forwardUrlAction">
+        <option value="keep">Keep current setting</option>
+        <option value="replace">Replace destination</option>
+        <option value="clear">Remove destination</option>
+      </select>
+      <label for="forward-url">New HTTPS destination (only for Replace)</label>
+      <input id="forward-url" name="forwardUrl" type="url" maxlength="2048" autocomplete="off">
+      <p id="forward-status" class="muted"></p>
+      <p class="muted">Forwarding is not active. If enabled in a later release, it will send the original Ko-fi payment data to your destination, potentially including supporter email, private messages, and shipping information.</p>
+      <button id="save-settings" type="submit">Save settings</button>
+    </form>
+    <section id="kofi-test" hidden>
+      <h2>Test delivery only</h2>
+      <p>This URL verifies a Ko-fi-format delivery and discards it. It never processes payments, grants roles, or forwards data. Do not replace an existing live Ko-fi webhook with this URL. If Ko-fi's tester requires changing your only webhook destination, wait until production activation is available.</p>
+      <p>Test URL: <span id="kofi-test-url"></span></p>
+      <p id="kofi-test-status" role="status">No verified test delivery yet.</p>
+      <p id="kofi-test-details" class="muted" role="status"></p>
+    </section>
+    <p class="muted">No production creator webhook URL or activation control is available yet.</p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String         @id @default(cuid())
+  discordUserId     String         @unique(map: "account_discord_user_id_key") @map("discord_user_id")
+  lastKnownUsername String         @map("last_known_username")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  lastLoginAt       DateTime       @map("last_login_at")
+  kofiIntegration   KofiIntegration?
+
+  @@map("account")
+}
+
+model KofiIntegration {
+  id                          String                @id @default(cuid())
+  accountId                   String                @unique(map: "kofi_integration_account_id_key") @map("account_id")
+  account                     Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  endpointId                  String                @unique(map: "kofi_integration_endpoint_id_key") @map("endpoint_id")
+  verificationTokenCiphertext String                @map("verification_token_ciphertext")
+  minimumAmount               Decimal               @map("minimum_amount")
+  currency                    String
+  forwardUrlCiphertext        String?               @map("forward_url_ciphertext")
+  enabled                     Boolean               @default(false)
+  lastTestAt                  DateTime?             @map("last_test_at")
+  lastWebhookAt               DateTime?             @map("last_webhook_at")
+  lastForwardedAt             DateTime?             @map("last_forwarded_at")
+  createdAt                   DateTime              @default(now()) @map("created_at")
+  updatedAt                   DateTime              @updatedAt @map("updated_at")
+  events                      KofiEvent[]
+  entitlements                KofiEntitlement[]
+
+  @@map("kofi_integration")
+}
+
+model KofiEvent {
+  id                       String               @id @default(cuid())
+  integrationId            String               @map("integration_id")
+  integration              KofiIntegration      @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  messageId                String               @map("message_id")
+  transactionId            String               @map("transaction_id")
+  eventType                String               @map("event_type")
+  supporterDiscordUserId   String?              @map("supporter_discord_user_id")
+  amount                   Decimal
+  currency                 String
+  subscriptionPayment      Boolean              @map("subscription_payment")
+  firstSubscriptionPayment Boolean              @map("first_subscription_payment")
+  tierName                 String?              @map("tier_name")
+  occurredAt               DateTime             @map("occurred_at")
+  receivedAt               DateTime             @default(now()) @map("received_at")
+  outcome                  String
+  entitlementExpiresAt     DateTime?            @map("entitlement_expires_at")
+  renewedEntitlements      KofiEntitlement[]
+  forwardDelivery          KofiForwardDelivery?
+
+  @@unique([integrationId, messageId], map: "kofi_event_integration_id_message_id_key")
+  @@unique([id, integrationId], map: "kofi_event_id_integration_id_key")
+  @@index([supporterDiscordUserId], map: "kofi_event_supporter_discord_user_id_idx")
+  @@index([receivedAt], map: "kofi_event_received_at_idx")
+  @@map("kofi_event")
+}
+
+model KofiEntitlement {
+  id             String          @id @default(cuid())
+  integrationId  String          @map("integration_id")
+  integration    KofiIntegration @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+  discordUserId  String          @map("discord_user_id")
+  lastEventId    String          @map("last_event_id")
+  lastEvent      KofiEvent       @relation(fields: [lastEventId, integrationId], references: [id, integrationId], onDelete: Restrict)
+  lastPaymentAt  DateTime        @map("last_payment_at")
+  expiresAt      DateTime        @map("expires_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  @@unique([integrationId, discordUserId], map: "kofi_entitlement_integration_id_discord_user_id_key")
+  @@index([discordUserId, expiresAt], map: "kofi_entitlement_discord_user_id_expires_at_idx")
+  @@index([expiresAt], map: "kofi_entitlement_expires_at_idx")
+  @@map("kofi_entitlement")
+}
+
+model SupporterRoleSync {
+  discordUserId String   @id @map("discord_user_id")
+  nextAttemptAt DateTime @map("next_attempt_at")
+  attemptCount  Int      @default(0) @map("attempt_count")
+  lastErrorCode String?  @map("last_error_code")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([nextAttemptAt], map: "supporter_role_sync_next_attempt_at_idx")
+  @@map("supporter_role_sync")
+}
+
+model KofiForwardDelivery {
+  id             String    @id @default(cuid())
+  eventId        String    @unique(map: "kofi_forward_delivery_event_id_key") @map("event_id")
+  event          KofiEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  bodyCiphertext String?   @map("body_ciphertext")
+  attemptCount   Int       @default(0) @map("attempt_count")
+  nextAttemptAt  DateTime  @map("next_attempt_at")
+  lastHttpStatus Int?      @map("last_http_status")
+  lastErrorCode  String?   @map("last_error_code")
+  deliveredAt    DateTime? @map("delivered_at")
+  discardedAt    DateTime? @map("discarded_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([nextAttemptAt], map: "kofi_forward_delivery_next_attempt_at_idx")
+  @@map("kofi_forward_delivery")
+}

@@ -2,7 +2,11 @@
  * @typedef {Readonly<{
  *   clientId: string,
  *   clientSecret: string,
+ *   guildId: string,
  *   host: string,
+ *   kofiTestMode: boolean,
+ *   modderRoleId: string | undefined,
+ *   moderatorRoleId: string | undefined,
  *   ownerUserId: string,
  *   port: number,
  *   publicBaseUrl: URL,
@@ -15,15 +19,18 @@
  * @returns {WebConfig | undefined}
  */
 export function readWebConfig(environment = process.env) {
+  const testMode = environment.KOFI_TEST_MODE?.trim() || 'false';
+  if (!['true', 'false'].includes(testMode)) throw new Error('KOFI_TEST_MODE must be true or false.');
   const names = [
     'DISCORD_CLIENT_ID',
     'DISCORD_CLIENT_SECRET',
+    'DISCORD_GUILD_ID',
     'DISCORD_OWNER_USER_ID',
     'PUBLIC_BASE_URL',
     'SESSION_SECRET',
   ];
   const dashboardNames = ['DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL', 'SESSION_SECRET'];
-  if (!dashboardNames.some((name) => environment[name]?.trim())) return undefined;
+  if (!dashboardNames.some((name) => environment[name]?.trim()) && testMode === 'false') return undefined;
   const configured = names.filter((name) => environment[name]?.trim());
   if (configured.length !== names.length) {
     throw new Error(`Dashboard configuration requires ${names.join(', ')}.`);
@@ -31,6 +38,10 @@ export function readWebConfig(environment = process.env) {
 
   const clientId = requireConfiguredValue(environment, 'DISCORD_CLIENT_ID');
   const clientSecret = requireConfiguredValue(environment, 'DISCORD_CLIENT_SECRET');
+  const guildId = requireConfiguredValue(environment, 'DISCORD_GUILD_ID');
+  if (!/^\d{17,20}$/u.test(guildId)) throw new Error('DISCORD_GUILD_ID must be a Discord ID.');
+  const modderRoleId = optionalDiscordId(environment, 'DISCORD_MODDER_ROLE_ID');
+  const moderatorRoleId = optionalDiscordId(environment, 'DISCORD_MODERATOR_ROLE_ID');
   const ownerUserId = requireConfiguredValue(environment, 'DISCORD_OWNER_USER_ID');
   const publicBaseUrl = new URL(requireConfiguredValue(environment, 'PUBLIC_BASE_URL'));
   if (publicBaseUrl.protocol !== 'https:' || publicBaseUrl.username
@@ -50,7 +61,11 @@ export function readWebConfig(environment = process.env) {
   return Object.freeze({
     clientId,
     clientSecret,
+    guildId,
     host: environment.HTTP_HOST?.trim() || '127.0.0.1',
+    kofiTestMode: testMode === 'true',
+    modderRoleId,
+    moderatorRoleId,
     ownerUserId,
     port,
     publicBaseUrl,
@@ -62,5 +77,13 @@ export function readWebConfig(environment = process.env) {
 function requireConfiguredValue(environment, name) {
   const value = environment[name]?.trim();
   if (!value) throw new Error(`${name} must be set.`);
+  return value;
+}
+
+/** @param {NodeJS.ProcessEnv} environment @param {string} name */
+function optionalDiscordId(environment, name) {
+  const value = environment[name]?.trim();
+  if (!value) return undefined;
+  if (!/^\d{17,20}$/u.test(value)) throw new Error(`${name} must be a Discord ID.`);
   return value;
 }

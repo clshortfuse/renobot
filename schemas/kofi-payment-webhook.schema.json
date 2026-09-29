@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://renobot.renodx.com/schemas/kofi-payment-webhook.schema.json",
+  "title": "Ko-fi payment webhook payload",
+  "description": "The decoded JSON object carried in the data field of Ko-fi's application/x-www-form-urlencoded webhook request.",
+  "type": "object",
+  "required": [
+    "verification_token",
+    "message_id",
+    "timestamp",
+    "type",
+    "amount",
+    "currency",
+    "kofi_transaction_id"
+  ],
+  "properties": {
+    "verification_token": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Creator-specific secret from Ko-fi's webhook configuration."
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Webhook delivery identifier used to deduplicate retries."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Time at which the payment occurred."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "Donation",
+        "Subscription",
+        "Shop Order",
+        "Commission"
+      ],
+      "description": "Ko-fi payment event type."
+    },
+    "is_public": {
+      "type": "boolean",
+      "description": "Whether the supporter chose to make the payment and message public."
+    },
+    "from_name": {
+      "type": "string",
+      "description": "Supporter-provided display name."
+    },
+    "message": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional message from the supporter."
+    },
+    "amount": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+      "description": "Payment amount represented as a non-negative decimal string."
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Ko-fi transaction URL."
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "description": "Supporter's email address when shared with the creator."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 currency code."
+    },
+    "is_subscription_payment": {
+      "type": "boolean",
+      "description": "Whether this is a recurring subscription or membership payment."
+    },
+    "is_first_subscription_payment": {
+      "type": "boolean",
+      "description": "Whether this is the first payment for a new subscription or membership."
+    },
+    "kofi_transaction_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ko-fi transaction identifier."
+    },
+    "shop_items": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/shopItem"
+      },
+      "description": "Purchased items for a shop order; otherwise null."
+    },
+    "tier_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Membership tier name for a tier subscription; otherwise null."
+    },
+    "shipping": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/shipping"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Shipping information for a physical shop order; otherwise null."
+    },
+    "discord_username": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Supporter's linked Discord username when available. Display only; use discord_userid as the account identifier."
+    },
+    "discord_userid": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9]{17,20}$",
+      "description": "Supporter's linked Discord user ID when available."
+    }
+  },
+  "$defs": {
+    "shopItem": {
+      "type": "object",
+      "required": [
+        "direct_link_code",
+        "quantity"
+      ],
+      "properties": {
+        "direct_link_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variation_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "shipping": {
+      "type": "object",
+      "properties": {
+        "full_name": {
+          "type": "string"
+        },
+        "street_address": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "state_or_province": {
+          "type": "string"
+        },
+        "postal_code": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "country_code": {
+          "type": "string",
+          "pattern": "^[A-Z]{2}$"
+        },
+        "telephone": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "verification_token": "00000000-0000-0000-0000-000000000000",
+      "message_id": "07c1ea35-9fbc-479f-bb08-bf29e71e4764",
+      "timestamp": "2026-09-18T01:31:20Z",
+      "type": "Subscription",
+      "is_public": true,
+      "from_name": "Jo Example",
+      "message": null,
+      "amount": "5.00",
+      "url": "https://ko-fi.com/Home/CoffeeShop?txid=00000000-1111-2222-3333-444444444444",
+      "email": "jo.example@example.com",
+      "currency": "USD",
+      "is_subscription_payment": true,
+      "is_first_subscription_payment": false,
+      "kofi_transaction_id": "00000000-1111-2222-3333-444444444444",
+      "shop_items": null,
+      "tier_name": "Bronze",
+      "shipping": null,
+      "discord_username": "Jo#4105",
+      "discord_userid": "012345678901234567"
+    }
+  ]
+}

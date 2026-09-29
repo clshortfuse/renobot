@@ -132,6 +132,9 @@ describe('configuration', () => {
     assert.deepEqual(readWebConfig({
       DISCORD_CLIENT_ID: 'application',
       DISCORD_CLIENT_SECRET: 'client-secret',
+      DISCORD_GUILD_ID: '23456789012345678',
+      DISCORD_MODDER_ROLE_ID: '34567890123456789',
+      DISCORD_MODERATOR_ROLE_ID: '45678901234567890',
       DISCORD_OWNER_USER_ID: '12345678901234567',
       HTTP_HOST: ' 127.0.0.1 ',
       HTTP_PORT: '3001',
@@ -140,7 +143,11 @@ describe('configuration', () => {
     }), {
       clientId: 'application',
       clientSecret: 'client-secret',
+      guildId: '23456789012345678',
       host: '127.0.0.1',
+      kofiTestMode: false,
+      modderRoleId: '34567890123456789',
+      moderatorRoleId: '45678901234567890',
       ownerUserId: '12345678901234567',
       port: 3001,
       publicBaseUrl: new URL('https://renobot.renodx.com/'),
@@ -149,18 +156,26 @@ describe('configuration', () => {
   });
 
   it('rejects partial or unsafe dashboard configuration', () => {
+    assert.throws(() => readWebConfig({ KOFI_TEST_MODE: 'true' }), /Dashboard configuration requires/u);
+    assert.throws(() => readWebConfig({ KOFI_TEST_MODE: 'yes' }), /KOFI_TEST_MODE must be true or false/u);
     assert.throws(() => readWebConfig({ PUBLIC_BASE_URL: 'https://renobot.renodx.com/' }),
       /Dashboard configuration requires/u);
     const base = {
       DISCORD_CLIENT_ID: 'application', DISCORD_CLIENT_SECRET: 'client-secret',
+      DISCORD_GUILD_ID: '23456789012345678',
       DISCORD_OWNER_USER_ID: '12345678901234567',
       SESSION_SECRET: '01234567890123456789012345678901',
     };
+    assert.equal(readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/', KOFI_TEST_MODE: 'true' })?.kofiTestMode, true);
     assert.throws(() => readWebConfig({ ...base, PUBLIC_BASE_URL: 'http://example.com/' }),
       /PUBLIC_BASE_URL/u);
     assert.throws(() => readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/', SESSION_SECRET: 'short' }),
       /SESSION_SECRET/u);
     assert.throws(() => readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/', HTTP_PORT: '0' }),
       /HTTP_PORT/u);
+    assert.throws(() => readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/', DISCORD_MODDER_ROLE_ID: 'invalid' }),
+      /DISCORD_MODDER_ROLE_ID/u);
+    assert.throws(() => readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/', DISCORD_GUILD_ID: 'invalid' }),
+      /DISCORD_GUILD_ID/u);
   });
 });

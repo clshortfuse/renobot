@@ -5,5 +5,10 @@ coverage/
 .env.*
 !.env.example
 *.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+data/
 .DS_Store
 Thumbs.db

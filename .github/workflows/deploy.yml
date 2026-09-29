@@ -39,8 +39,21 @@ jobs:
       - run: npm ci
       - run: npm run check
 
+  database:
+    needs: authorize
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Apply migrations and run SQLite integration tests
+        run: npm run db:test
+
   publish:
-    needs: validate
+    needs: [validate, database]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -95,4 +108,11 @@ jobs:
       - name: Deploy image
         env:
           IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
-        run: ssh production /opt/renobot/deploy.sh "$IMAGE"
+          KOFI_TEST_MODE: ${{ vars.KOFI_TEST_MODE }}
+        run: |
+          mode=${KOFI_TEST_MODE:-false}
+          if [[ "$mode" != true && "$mode" != false ]]; then
+            echo 'KOFI_TEST_MODE must be true or false.' >&2
+            exit 2
+          fi
+          ssh production /opt/renobot/deploy.sh "$IMAGE" "$mode"
