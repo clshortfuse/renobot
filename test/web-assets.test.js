@@ -10,7 +10,7 @@ describe('static portal assets', () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
       'account-emails', 'account-early-access', 'account-payments', 'account-payments-status'].map((id) => [id,
-      { hidden: true, disabled: true, state: {}, listeners: {},
+      { hidden: true, disabled: true, state: {}, listeners: /** @type {Record<string, Function>} */ ({}),
         addEventListener(/** @type {string} */ type, /** @type {Function} */ callback) { this.listeners[type] = callback; },
         patch(/** @type {object} */ state) { Object.assign(this.state, state); } }]));
     /** @type {((value: any) => void) | undefined} */
@@ -47,7 +47,8 @@ describe('static portal assets', () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls.at(-1), '/app/api/account?before=fresh');
   });
-  it('shows multiple verified addresses and personal payments without a privileged role', async () => {
+  for (const roleManaged of [false, true]) {
+  it(`shows personal payments with recorded grant status ${roleManaged}`, async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
       'account-emails', 'account-early-access', 'account-payments', 'account-payments-status'].map((id) => [id,
@@ -60,7 +61,7 @@ describe('static portal assets', () => {
         calls.push(path);
         return { ok: true, json: async () => ({ emails: [
           { email: 'first@example.test', verifiedBy: 'discord' }, { email: 'second@example.test', verifiedBy: 'discord' },
-        ], earlyAccess: { enabled: true, expiresAt: '2099-01-01T00:00:00Z', creditedMonths: 2, roleManaged: false },
+        ], earlyAccess: { enabled: true, expiresAt: '2099-01-01T00:00:00Z', creditedMonths: 2, roleManaged },
         entries: [{ recipient: '<script>', amount: '5.00', currency: 'USD', receivedAt: '2026-09-29T00:00:00Z',
           eventType: 'Donation', transactionId: 'tx', outcome: 'recorded' }], nextCursor: null }) };
       },
@@ -71,8 +72,11 @@ describe('static portal assets', () => {
     assert.equal(nodes['account-check-payments'].disabled, false);
     assert.equal(nodes['account-payments'].state.items[0].recipient, '<script>');
     assert.equal(nodes['account-payments-more'].hidden, true);
-    assert.match(nodes['account-early-access'].textContent, /Awaiting access approval/u);
+    assert.match(nodes['account-early-access'].textContent, roleManaged ? /Grant recorded/u : /No grant recorded/u);
+    assert.match(nodes['account-early-access'].textContent, /Discord role presence is not checked live/u);
+    assert.doesNotMatch(nodes['account-early-access'].textContent, /Discord access granted|Awaiting access approval/u);
   });
+  }
   it('keeps the same capability-gated navigation order on every portal page', () => {
     for (const html of [appPage, modderKofiPage, adminKofiPage, adminEarlyAccessPage]) {
       assert.match(html, /<nav id="portal-navigation"[^>]*hidden>/u);

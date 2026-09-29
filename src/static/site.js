@@ -86,7 +86,7 @@ async function loadSupporterAccount(csrf) {
     const access = result.earlyAccess;
     element('account-early-access').textContent = !access.enabled ? 'Early Access is not available right now.'
       : access.expiresAt && new Date(access.expiresAt) > new Date()
-        ? `Eligible until ${new Date(access.expiresAt).toLocaleDateString()}.${access.roleManaged ? ' Discord access granted.' : ' Awaiting access approval.'}`
+        ? `Eligible until ${new Date(access.expiresAt).toLocaleDateString()}.${access.roleManaged ? ' Grant recorded.' : ' No grant recorded.'} Discord role presence is not checked live.`
         : access.creditedMonths ? 'Your Early Access has expired.' : 'No Early Access recorded yet.';
     const items = result.entries.map((entry) => ({ amount: `${entry.amount} ${entry.currency}`, recipient: entry.recipient,
       received: new Date(entry.receivedAt).toLocaleString(), paymentType: entry.eventType, transaction: entry.transactionId,
