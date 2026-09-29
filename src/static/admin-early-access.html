@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Early-access review · Renobot</title>
+  <link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/site.js" defer></script>
+</head>
+<body data-page="admin-early-access">
+  <main id="content">
+    <nav aria-label="Portal navigation"><a href="/app">← Portal</a></nav>
+    <p class="eyebrow">Owner dashboard</p>
+    <h1>Early-access review</h1>
+    <p>Review who earned access, their cumulative donation total, the periods earned, and which modders received each credited payment. Historical receipts do not grant roles automatically: review the payments, then approve each currently eligible person to queue their role. New payments are handled automatically. Recorded grants do not guarantee the role is currently present on Discord.</p>
+    <p id="early-access-status" role="status">Checking owner access…</p>
+    <p id="early-access-approval-status" role="status"></p>
+    <section id="early-access-content" hidden>
+      <div class="membership-table-scroll" role="region" aria-label="Early-access members" tabindex="0">
+        <table class="membership-table">
+          <thead><tr><th scope="col">Discord user</th><th scope="col">Donated</th><th scope="col">Months earned</th><th scope="col">Access until</th><th scope="col">Role sync</th><th scope="col">Why</th><th scope="col">Approval</th></tr></thead>
+          <tbody id="early-access-list"></tbody>
+        </table>
+      </div>
+      <button id="early-access-more" type="button" hidden>Load more people</button>
+      <button id="early-access-refresh" type="button">Refresh</button>
+      <h2>Selected person</h2>
+      <p id="early-access-detail-status" role="status">Select Review payments to see periods and qualifying donations.</p>
+      <div id="early-access-detail" hidden>
+        <h3>Access periods</h3>
+        <ul id="early-access-periods"></ul>
+        <h3>Credited payments</h3>
+        <ul id="early-access-contributions"></ul>
+        <button id="early-access-contributions-more" type="button" hidden>Load more payments</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

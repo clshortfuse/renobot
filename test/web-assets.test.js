@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { describe, it } from 'node:test';
 
-import { adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteJs } from '../src/web-assets.js';
+import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteJs } from '../src/web-assets.js';
 
 describe('static portal assets', () => {
   it('keeps the proxy read timeout longer than the SSE heartbeat interval', () => {
@@ -16,7 +16,7 @@ describe('static portal assets', () => {
   });
 
   it('contains no template placeholders or server-side user data', () => {
-    for (const html of [adminKofiPage, appPage, modderKofiPage, errorPage, homePage, notFoundPage]) {
+    for (const html of [adminEarlyAccessPage, adminKofiPage, appPage, modderKofiPage, errorPage, homePage, notFoundPage]) {
       assert.match(html, /<!doctype html>/u);
       assert.doesNotMatch(html, /\{\{|<script(?! src="\/assets\/site\.js")/u);
     }
@@ -27,7 +27,8 @@ describe('static portal assets', () => {
     /** @type {Record<string, { textContent?: string, hidden?: boolean, value?: string, disabled?: boolean }>} */
     const elements = {
       username: {}, connection: {}, 'owner-badge': { hidden: true }, 'modder-badge': { hidden: true },
-      'reviewer-badge': { hidden: true }, 'kofi-link': { hidden: true }, 'admin-kofi-link': { hidden: true }, 'portal-navigation': { hidden: true }, csrf: {}, 'sign-out': { disabled: true },
+      'reviewer-badge': { hidden: true }, 'kofi-link': { hidden: true }, 'admin-kofi-link': { hidden: true },
+      'admin-early-access-link': { hidden: true }, 'portal-navigation': { hidden: true }, csrf: {}, 'sign-out': { disabled: true },
     };
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
@@ -41,6 +42,7 @@ describe('static portal assets', () => {
     assert.equal(elements['modder-badge']?.hidden, true);
     assert.equal(elements['kofi-link']?.hidden, false);
     assert.equal(elements['admin-kofi-link']?.hidden, false);
+    assert.equal(elements['admin-early-access-link']?.hidden, false);
     assert.equal(elements['portal-navigation']?.hidden, false);
     assert.equal(elements.csrf?.value, 'csrf-value');
     assert.equal(elements['sign-out']?.disabled, false);
@@ -48,7 +50,7 @@ describe('static portal assets', () => {
 
   it('shows only role-derived status and keeps unfinished destinations unlinked', async () => {
     const elements = Object.fromEntries(['username', 'connection', 'csrf', 'sign-out', 'owner-badge',
-      'modder-badge', 'reviewer-badge', 'kofi-link', 'admin-kofi-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
+      'modder-badge', 'reviewer-badge', 'kofi-link', 'admin-kofi-link', 'admin-early-access-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
@@ -61,6 +63,7 @@ describe('static portal assets', () => {
     assert.equal(elements['portal-navigation']?.hidden, false);
     assert.equal(elements['kofi-link']?.hidden, false);
     assert.equal(elements['admin-kofi-link']?.hidden, true);
+    assert.equal(elements['admin-early-access-link']?.hidden, true);
     assert.doesNotMatch(appPage, /href="\/app\/admin(?:"|\/appeals)/u);
   });
 
@@ -128,6 +131,51 @@ describe('static portal assets', () => {
     assert.match(operations[0]?.textContent ?? '', /accepted/u);
     assert.match(nodes['admin-operations-status'].textContent, /current process only/u);
     assert.doesNotMatch(adminKofiPage, /private@example|fixture-token|<script(?! src="\/assets\/site\.js")/u);
+  });
+
+  it('renders early-access owner review and credited donations only as DOM text', async () => {
+    /** @type {Record<string, any>} */
+    const nodes = Object.fromEntries(['early-access-status', 'early-access-approval-status', 'early-access-content', 'early-access-list',
+      'early-access-more', 'early-access-refresh', 'early-access-contributions-more',
+      'early-access-detail-status', 'early-access-detail', 'early-access-periods', 'early-access-contributions']
+      .map((id) => [id, { hidden: true, addEventListener() {}, replaceChildren() {}, append() {} }]));
+    /** @type {any[]} */
+    let rows = [];
+    /** @type {any[]} */
+    let contributions = [];
+    nodes['early-access-list'].replaceChildren = (/** @type {any[]} */ ...items) => { rows = items; };
+    nodes['early-access-contributions'].replaceChildren = (/** @type {any[]} */ ...items) => { contributions = items; };
+    /** @type {(() => void) | undefined} */
+    let review;
+    await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
+      document: { body: { dataset: { page: 'admin-early-access' } },
+        getElementById: (/** @type {string} */ id) => nodes[id],
+        createElement: (/** @type {string} */ tag) => tag === 'button'
+          ? { textContent: '', addEventListener(/** @type {string} */ name, /** @type {() => void} */ callback) {
+            if (name === 'click') review = callback;
+          } }
+          : { tagName: tag, textContent: '', children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...items) {
+            this.children.push(...items);
+          } } },
+      fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
+        ? { username: 'owner' }
+        : path === '/app/api/admin/early-access' ? { enabled: true, members: [{ discordUserId: '12345678901234567',
+          discordName: '<img onerror=alert(1)>', totalAmount: '13.00', currency: 'USD', creditedMonths: 2,
+          expiresAt: '2099-10-29T00:00:00Z', active: true, roleManaged: true, syncStatus: 'scheduled',
+          nextAttemptAt: null }], nextCursor: null }
+          : { periods: [{ startedAt: '2026-09-29T00:00:00Z', expiresAt: '2026-11-29T00:00:00Z', months: 2 }],
+            contributions: [{ eventId: 'receipt', amount: '13.00', currency: 'USD', eventType: 'Donation',
+              receivedAt: '2026-09-29T00:00:00Z', modderUsername: '<script>',
+              modderDiscordUserId: '23456789012345678' }], nextCursor: null } }),
+    });
+    assert.equal(rows[0]?.children[0]?.children[0]?.textContent, '<img onerror=alert(1)>');
+    assert.equal(rows[0]?.children[1]?.textContent, '13.00 USD');
+    assert.ok(review);
+    review();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(contributions[0]?.textContent ?? '', /<script> \(23456789012345678\)/u);
+    assert.equal(nodes['early-access-content'].hidden, false);
+    assert.equal(nodes['early-access-detail'].hidden, false);
   });
 
   it('renders own webhook and paged payment receipts as DOM text without stored secrets', async () => {

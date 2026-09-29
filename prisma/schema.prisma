@@ -110,6 +110,46 @@ model ManagedSupporterRole {
   @@map("managed_supporter_role")
 }
 
+model EarlyAccessBalance {
+  discordUserId  String   @id @map("discord_user_id")
+  totalAmount    Decimal  @default(0) @map("total_amount")
+  creditedMonths Int      @default(0) @map("credited_months")
+  expiresAt      DateTime? @map("expires_at")
+
+  @@map("early_access_balance")
+}
+
+model EarlyAccessCredit {
+  eventId       String   @id @map("event_id")
+  discordUserId String   @map("discord_user_id")
+  creditedAt    DateTime @map("credited_at")
+
+  @@index([discordUserId, creditedAt, eventId], map: "early_access_credit_discord_user_id_credited_at_event_id_idx")
+  @@map("early_access_credit")
+}
+
+model EarlyAccessPeriod {
+  id            String   @id @default(cuid())
+  discordUserId String   @map("discord_user_id")
+  startedAt     DateTime @map("started_at")
+  expiresAt     DateTime @map("expires_at")
+  months        Int
+
+  @@index([discordUserId, startedAt], map: "early_access_period_discord_user_id_started_at_idx")
+  @@map("early_access_period")
+}
+
+model EarlyAccessRoleSync {
+  discordUserId String   @id @map("discord_user_id")
+  nextAttemptAt DateTime @map("next_attempt_at")
+  attemptCount  Int      @default(0) @map("attempt_count")
+  lastErrorCode String?  @map("last_error_code")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([nextAttemptAt], map: "early_access_role_sync_next_attempt_at_idx")
+  @@map("early_access_role_sync")
+}
+
 model KofiForwardDelivery {
   id             String    @id @default(cuid())
   eventId        String    @unique(map: "kofi_forward_delivery_event_id_key") @map("event_id")

@@ -1,0 +1,9 @@
+# Early-access donation periods
+
+- Configure `DISCORD_EARLY_ACCESS_ROLE_ID=1554515217751216185` in the private host environment to enable an independent role. Do not hardcode the guild role into the bot.
+- Accept verified Ko-fi Donation and Subscription receipts from any modder integration, only when the payload contains a valid linked Discord ID and uses the configured currency. Shop orders and commissions do not earn early access. The known test Discord ID `012345678901234567` is excluded from credits and role grants; other test payloads with a real ID cannot be reliably distinguished from payments.
+- Track each Discord user's combined paid balance in cents across modders. Each complete $5 in accumulated balance earns one calendar month; keep the unused cents for later top-ups, even after a lapse. Do not count a duplicate receipt twice.
+- Append earned months to the current expiry if active; otherwise start a new period at payment receipt time. Keep each earned period in the database for audit. On activation, replay previously verified linked receipts in original receipt order and mark each as credited, so restarts cannot grant months twice.
+- Historical replay creates review records, not role grants. Let the owner review credited receipts and periods and approve active people individually with a CSRF-protected action. New verified payments may queue role sync automatically.
+- Queue independent early-access role reconciliation only for owner-approved historical recipients or newly earned live access. Grant and remove only Renobot-managed early-access roles, never adopt or remove a manually granted role. Keep existing supporter/Clubroom entitlement behavior unchanged.
+- Test split payments, cross-modder totals, rounding, lapses, duplicate and invalid payments, disabled role configuration, period boundaries, retries, and manual-role protection; run `npm run check` and `npm run db:test`.
