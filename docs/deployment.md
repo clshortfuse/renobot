@@ -110,6 +110,20 @@ remain unavailable.
 The intended shared supporter role ID is `1408262950799802409`. Set it as
 `DISCORD_SUPPORTER_ROLE_ID` only in the private host environment when actual
 role grants are approved; this repository does not activate it by default.
+
+The separate Early Access role is opt-in through
+`DISCORD_EARLY_ACCESS_ROLE_ID` in `/etc/renobot/renobot.env`, alongside the
+existing Ko-fi database settings. The intended role ID is
+`1554515217751216185`; the repository does not enable it by default. The bot
+needs Manage Roles permission and a role above the Early Access role. This
+role does not grant Supporter or Clubroom permissions; configure channel
+permissions separately in Discord. New qualifying donations can queue role
+sync, but importing historical receipts must be triggered by the owner at
+`/app/admin/early-access` and does not grant roles. The owner reviews and
+approves each eligible historical recipient individually. Do not enable the
+setting until grants for new payments are acceptable. See `docs/portal.md` for
+the qualification and review policy.
+
 Ko-fi webhook receipts record the first verified delivery's source IP/port and
 the Node socket peer in the owner-only ledger. Rejected/duplicate deliveries
 are logged as sanitized outcomes with source details in the bounded container
