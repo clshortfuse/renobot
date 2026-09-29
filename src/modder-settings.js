@@ -75,13 +75,13 @@ export function decryptSetting(value, key, owner, field) {
 export function parseModderSettings(body, config) {
   const keys = ['csrf', 'minimumAmount', 'currency', 'verificationToken', 'forwardUrlAction', 'forwardUrl'];
   if ([...body.keys()].some((key) => !keys.includes(key) || body.getAll(key).length !== 1)) return undefined;
-  const minimumAmount = body.get('minimumAmount') ?? '';
+  // Legacy clients may still send this field; it never overrides global policy.
+  const minimumAmount = config.minimumAmount;
   const currency = body.get('currency') ?? '';
   const verificationToken = body.get('verificationToken') ?? '';
   const forwardUrlAction = body.get('forwardUrlAction');
   const forwardUrl = body.get('forwardUrl') ?? '';
-  if (!validAmount(minimumAmount) || Number(minimumAmount) < Number(config.minimumAmount)
-    || currency !== config.currency || verificationToken.length > 256
+  if (currency !== config.currency || verificationToken.length > 256
     || (verificationToken.length > 0 && (!verificationToken.trim()
       || [...verificationToken].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)))
     || !['keep', 'replace', 'clear'].includes(forwardUrlAction ?? '')

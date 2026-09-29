@@ -33,11 +33,17 @@ describe('modder settings configuration', () => {
     assert.throws(() => encryptSetting('secret', key, '', 'verification-token'));
   });
 
-  it('accepts only bounded single-currency settings above the floor', () => {
+  it('uses global policy regardless of legacy client amount settings', () => {
     assert.deepEqual(parseModderSettings(new URLSearchParams(valid), config), {
-      minimumAmount: '5.25', currency: 'USD', verificationToken: 'private', forwardUrlAction: 'keep', forwardUrl: '',
+      minimumAmount: '5.00', currency: 'USD', verificationToken: 'private', forwardUrlAction: 'keep', forwardUrl: '',
     });
-    for (const changes of [{ minimumAmount: '4.99' }, { minimumAmount: '5.001' }, { currency: 'EUR' },
+    for (const amount of ['4.99', '5.001', '100.00']) {
+      assert.equal(parseModderSettings(new URLSearchParams({ ...valid, minimumAmount: amount }), config)?.minimumAmount, '5.00');
+    }
+    const withoutAmount = new URLSearchParams(valid);
+    withoutAmount.delete('minimumAmount');
+    assert.equal(parseModderSettings(withoutAmount, config)?.minimumAmount, '5.00');
+    for (const changes of [{ currency: 'EUR' },
       { forwardUrlAction: 'replace', forwardUrl: 'http://example.com/hook' },
       { forwardUrlAction: 'replace', forwardUrl: 'https://127.0.0.1/hook' },
       { forwardUrlAction: 'replace', forwardUrl: 'https://user:pass@example.com/hook' },
