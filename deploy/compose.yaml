@@ -9,7 +9,6 @@ services:
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: 3000
       NODE_ENV: production
-      KOFI_TEST_MODE: ${KOFI_TEST_MODE:-false}
       KOFI_ENCRYPTION_KEY: ${KOFI_ENCRYPTION_KEY:-}
     ports:
       - 127.0.0.1:3000:3000
@@ -31,7 +30,7 @@ services:
         - CMD
         - node
         - -e
-        - fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+        - fetch('http://127.0.0.1:3000/health/webhook').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
       interval: 15s
       timeout: 5s
       retries: 4

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
 import { requiredCapability, resolveCapabilities } from './web-capabilities.js';
 import { MissingVerificationTokenError } from './database.js';
-import { verifyKofiTestDelivery } from './kofi-ingestion.js';
+import { maxKofiBodyBytes, receiveKofiReceipt } from './kofi-ingestion.js';
 import { parseModderSettings } from './modder-settings.js';
 import { createOAuthState, createSession, csrfToken, oauthReturnTo, readCookie, readSession, safeAppPath, secureCookie, verifyCsrfToken, verifyOAuthState } from './web-session.js';
 
@@ -23,10 +23,10 @@ const sessionCookie = 'renobot_session';
 export function createWebServer(options) {
   const request = options.request ?? fetch;
   /** @type {Map<string, Set<{ userId: string, token: string, response: import('node:http').ServerResponse }>>} */
-  const testSubscribers = new Map();
-  /** @param {string} integrationId @param {import('./kofi-ingestion.js').KofiTestSummary} summary */
-  function publishTest(integrationId, summary) {
-    for (const subscriber of testSubscribers.get(integrationId) ?? []) {
+  const subscribersByIntegration = new Map();
+  /** @param {string} integrationId */
+  function publishReceipt(integrationId) {
+    for (const subscriber of subscribersByIntegration.get(integrationId) ?? []) {
       void (async () => {
         try {
           if (!readSession(subscriber.token, options.config?.sessionSecret ?? '')) {
@@ -39,7 +39,7 @@ export function createWebServer(options) {
             subscriber.response.end();
             return;
           }
-          if (!subscriber.response.destroyed) subscriber.response.write(`event: test-delivery\ndata: ${JSON.stringify(summary)}\n\n`);
+          if (!subscriber.response.destroyed) subscriber.response.write('event: receipt\ndata: {}\n\n');
         } catch { subscriber.response.end(); }
       })();
     }
@@ -56,12 +56,18 @@ export function createWebServer(options) {
         sendJson(response, ready ? 200 : 503, { ready });
         return;
       }
+      if (incoming.method === 'GET' && url.pathname === '/health/webhook') {
+        const ready = options.settingsConfig && options.database
+          ? await options.database.isReady() : options.bot.isReady() && (!options.database || await options.database.isReady());
+        sendJson(response, ready ? 200 : 503, { ready });
+        return;
+      }
       if (!options.config) {
         sendText(response, 404, 'Not found');
         return;
       }
-      const testEndpoint = /^\/test\/kofi\/([A-Za-z0-9_-]{43})$/u.exec(url.pathname);
-      if (incoming.method === 'POST' && testEndpoint && options.config.kofiTestMode) {
+      const receiptEndpoint = /^\/prod\/kofi\/([A-Za-z0-9_-]{43})$/u.exec(url.pathname);
+      if (incoming.method === 'POST' && receiptEndpoint) {
         if (!options.database || !options.settingsConfig) {
           sendText(response, 503, 'Unavailable');
           return;
@@ -70,10 +76,11 @@ export function createWebServer(options) {
           sendText(response, 415, 'Unsupported content type');
           return;
         }
-        const rawBody = await readBody(incoming, 32768);
-        const verified = await verifyKofiTestDelivery(options.database, options.settingsConfig.key,
-          testEndpoint[1] ?? '', rawBody, publishTest);
-        sendText(response, verified ? 200 : 403, verified ? 'Test delivery verified' : 'Delivery not verified');
+        const rawBody = await readBody(incoming, maxKofiBodyBytes);
+        const result = await receiveKofiReceipt(options.database, options.settingsConfig.key,
+          receiptEndpoint[1] ?? '', rawBody, publishReceipt);
+        sendText(response, result === 'rejected' ? 403 : 200,
+          result === 'rejected' ? 'Delivery not verified' : 'Receipt recorded; no supporter role changed');
         return;
       }
       if (incoming.method === 'GET' && url.pathname === '/assets/site.css') {
@@ -100,7 +107,7 @@ export function createWebServer(options) {
         return;
       }
       if ((url.pathname === '/app/api/modder/kofi' && (incoming.method === 'GET' || incoming.method === 'POST'))
-        || (options.config.kofiTestMode && url.pathname === '/app/api/modder/kofi/events' && incoming.method === 'GET')) {
+        || (['/app/api/modder/kofi/events', '/app/api/modder/kofi/entries'].includes(url.pathname) && incoming.method === 'GET')) {
         const token = readCookie(incoming.headers.cookie, sessionCookie);
         const session = readSession(token, options.config.sessionSecret);
         if (!session) {
@@ -122,19 +129,35 @@ export function createWebServer(options) {
           sendJson(response, 503, { error: 'Settings are not configured' });
           return;
         }
+        if (url.pathname === '/app/api/modder/kofi/entries') {
+          const before = url.searchParams.get('before') ?? undefined;
+          if ((before && !/^[A-Za-z0-9_-]{1,64}$/u.test(before)) || url.searchParams.has('before') && !before) {
+            sendJson(response, 400, { error: 'Invalid entry cursor' });
+            return;
+          }
+          const { entries, nextCursor } = await options.database.listKofiEntries(session.id, before);
+          sendJson(response, 200, { entries: entries.map((entry) => ({ id: entry.id,
+            messageId: entry.messageId, transactionId: entry.transactionId,
+            eventType: entry.eventType, amount: entry.amount.toFixed(2), currency: entry.currency,
+            subscriptionPayment: entry.subscriptionPayment, firstSubscriptionPayment: entry.firstSubscriptionPayment,
+            supporterDiscordUserId: entry.supporterDiscordUserId, tierName: entry.tierName,
+            occurredAt: entry.occurredAt.toISOString(), receivedAt: entry.receivedAt.toISOString(),
+            outcome: entry.outcome })), nextCursor });
+          return;
+        }
         if (url.pathname === '/app/api/modder/kofi/events') {
           const integration = await options.database.getIntegration(session.id);
           if (!integration) {
             sendJson(response, 404, { error: 'No integration configured' });
             return;
           }
-          let subscribers = testSubscribers.get(integration.id);
+          let subscribers = subscribersByIntegration.get(integration.id);
           if (!subscribers) {
             subscribers = new Set();
-            testSubscribers.set(integration.id, subscribers);
+            subscribersByIntegration.set(integration.id, subscribers);
           }
           if (subscribers.size >= 5) {
-            sendJson(response, 429, { error: 'Too many test streams' });
+            sendJson(response, 429, { error: 'Too many receipt streams' });
             return;
           }
           const subscriber = { userId: session.id, token: token ?? '', response };
@@ -151,7 +174,7 @@ export function createWebServer(options) {
             clearInterval(heartbeat);
             clearTimeout(expiry);
             subscribers.delete(subscriber);
-            if (subscribers.size === 0) testSubscribers.delete(integration.id);
+            if (subscribers.size === 0) subscribersByIntegration.delete(integration.id);
           });
           return;
         }
@@ -186,12 +209,11 @@ export function createWebServer(options) {
           const integration = await options.database.getIntegration(session.id);
           sendJson(response, 200, { configured: Boolean(integration), minimumAmount: integration?.minimumAmount.toFixed(2)
             ?? options.settingsConfig.minimumAmount, currency: options.settingsConfig.currency,
-          floor: options.settingsConfig.minimumAmount, testModeEnabled: options.config.kofiTestMode,
+          floor: options.settingsConfig.minimumAmount,
           hasVerificationToken: Boolean(integration?.verificationTokenCiphertext),
           hasForwardUrl: Boolean(integration?.forwardUrlCiphertext), active: false,
-          testUrl: options.config.kofiTestMode && integration
-            ? new URL(`/test/kofi/${integration.endpointId}`, options.config.publicBaseUrl).href : null,
-          lastTestAt: options.config.kofiTestMode ? integration?.lastTestAt?.toISOString() ?? null : null });
+          prodUrl: integration ? new URL(`/prod/kofi/${integration.endpointId}`, options.config.publicBaseUrl).href : null,
+          lastWebhookAt: integration?.lastWebhookAt?.toISOString() ?? null });
         } catch {
           options.logger.warn('Modder settings lookup failed');
           sendJson(response, 503, { error: 'Please try again later' });

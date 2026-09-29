@@ -6,6 +6,7 @@ import { createWebServer } from '../src/web-server.js';
 import { MissingVerificationTokenError } from '../src/database.js';
 import { encryptSetting, integrationSecretOwner } from '../src/modder-settings.js';
 import { createSession, csrfToken } from '../src/web-session.js';
+import { membership } from './fixtures/kofi-membership.js';
 
 const secret = '01234567890123456789012345678901';
 const config = Object.freeze({
@@ -13,7 +14,6 @@ const config = Object.freeze({
   clientSecret: 'client-secret',
   guildId: '23456789012345678',
   host: '127.0.0.1',
-  kofiTestMode: false,
   modderRoleId: undefined,
   moderatorRoleId: undefined,
   ownerUserId: 'owner',
@@ -86,6 +86,19 @@ describe('dashboard routes', () => {
     assert.deepEqual(await response.json(), { ready: false });
   });
 
+  it('keeps webhook health independent of Discord while requiring durable storage', async () => {
+    let available = true;
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      isReady: async () => available,
+    }));
+    const baseUrl = await startServer({ ready: false, database,
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    assert.equal((await fetch(`${baseUrl}/health`)).status, 503);
+    assert.deepEqual(await (await fetch(`${baseUrl}/health/webhook`)).json(), { ready: true });
+    available = false;
+    assert.equal((await fetch(`${baseUrl}/health/webhook`)).status, 503);
+  });
+
   it('renders a public landing page without starting Discord authentication', async () => {
     const baseUrl = await startServer();
     const home = await fetch(`${baseUrl}/`, { redirect: 'manual' });
@@ -147,74 +160,164 @@ describe('dashboard routes', () => {
     assert.equal(anonymous.status, 200);
     const html = await anonymous.text();
     assert.equal(html, await member.text());
-    assert.match(html, /No production creator webhook URL or activation control/u);
+    assert.match(html, /Ko-fi webhook/u);
     assert.doesNotMatch(html, /\{\{|https:\/\/renobot\.example\/webhooks/u);
     assert.equal((await fetch(`${baseUrl}/app/api/modder/kofi`)).status, 401);
   });
 
-  it('accepts only verified test deliveries and records status without a payment event', async () => {
+  it('stores the Ko-fi membership example through the only webhook and rejects invalid deliveries', async () => {
     const key = Buffer.alloc(32, 7);
     const endpointId = 'a'.repeat(43);
     const integration = { id: 'integration', accountId: 'account', endpointId,
       verificationTokenCiphertext: '' };
     integration.verificationTokenCiphertext = encryptSetting('secret', key,
       integrationSecretOwner(integration), 'verification-token');
-    let tests = 0;
+    let receipts = 0;
     const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
-      findTestIntegrationByEndpoint: async (/** @type {string} */ id) => id === endpointId ? integration : null,
-      recordKofiTest: async () => { tests++; return true; },
-      recordKofiPayment: () => { throw new Error('Payment ledger must not be used by the tester'); },
+      findIntegrationByEndpoint: async (/** @type {string} */ id) => id === endpointId ? integration : null,
+      recordKofiReceipt: async () => { receipts++; return 'accepted'; },
     }));
-    const baseUrl = await startServer({ database, config: { ...config, kofiTestMode: true },
+    const baseUrl = await startServer({ database,
       settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
-    const url = `${baseUrl}/test/kofi/${endpointId}`;
+    const url = `${baseUrl}/prod/kofi/${endpointId}`;
     const body = (/** @type {string} */ token) => new URLSearchParams({ data: JSON.stringify({
-      verification_token: token, message_id: 'test-message', kofi_transaction_id: 'test-transaction',
-      timestamp: '2026-09-18T01:31:20Z', type: 'Donation', amount: '5.00', currency: 'USD',
+      ...membership, verification_token: token,
     }) });
     assert.equal((await fetch(url)).status, 404);
     assert.equal((await fetch(url, { method: 'POST', body: body('secret'),
       headers: { 'Content-Type': 'text/plain' } })).status, 415);
-    assert.equal((await fetch(`${baseUrl}/test/kofi/${'b'.repeat(43)}`, { method: 'POST', body: body('secret') })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/prod/kofi/${'b'.repeat(43)}`, { method: 'POST', body: body('secret') })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/dev/kofi/${endpointId}`, { method: 'POST', body: body('secret') })).status, 404);
+    assert.equal((await fetch(`${baseUrl}/test/kofi/${endpointId}`, { method: 'POST', body: body('secret') })).status, 404);
     assert.equal((await fetch(url, { method: 'POST', body: body('wrong') })).status, 403);
-    assert.equal((await fetch(url, { method: 'POST', body: 'x'.repeat(32769),
+    assert.equal((await fetch(url, { method: 'POST', body: 'x'.repeat(262145),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })).status, 413);
-    assert.equal(tests, 0);
+    assert.equal(receipts, 0);
     const verified = await fetch(url, { method: 'POST', body: body('secret') });
     assert.equal(verified.status, 200);
-    assert.equal(await verified.text(), 'Test delivery verified');
+    assert.equal(await verified.text(), 'Receipt recorded; no supporter role changed');
     assert.equal(verified.headers.get('cache-control'), 'no-store');
-    assert.equal(tests, 1);
+    assert.equal(receipts, 1);
   });
 
-  it('keeps test endpoints and URL unavailable unless test mode is explicitly enabled', async () => {
+  it('returns one stable webhook URL for a configured integration', async () => {
     const key = Buffer.alloc(32, 7);
     const endpointId = 'a'.repeat(43);
     const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
       getIntegration: async () => ({ endpointId, minimumAmount: { toFixed: () => '5.00' },
-        verificationTokenCiphertext: 'configured', lastTestAt: new Date('2026-09-28T12:00:00Z') }),
-      findTestIntegrationByEndpoint: () => { throw new Error('Test lookup must be disabled'); },
+        verificationTokenCiphertext: 'configured', lastWebhookAt: new Date('2026-09-28T12:00:00Z') }),
+      findIntegrationByEndpoint: async () => null,
     }));
     const baseUrl = await startServer({ database, settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
     const cookie = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
-    assert.equal((await fetch(`${baseUrl}/test/kofi/${endpointId}`, {
+    assert.equal((await fetch(`${baseUrl}/prod/kofi/${endpointId}`, {
       method: 'POST', body: new URLSearchParams({ data: '{}' }),
-    })).status, 404);
-    assert.equal((await fetch(`${baseUrl}/app/api/modder/kofi/events`, { headers: cookie })).status, 404);
+    })).status, 403);
+    const stream = await fetch(`${baseUrl}/app/api/modder/kofi/events`, { headers: cookie });
+    assert.equal(stream.status, 200);
+    await stream.body?.cancel();
     const status = await fetch(`${baseUrl}/app/api/modder/kofi`, { headers: cookie });
     assert.equal(status.status, 200);
     const disabled = await status.json();
-    assert.equal(disabled.testModeEnabled, false);
-    assert.equal(disabled.testUrl, null);
-    const stagingUrl = await startServer({ database, config: { ...config, kofiTestMode: true },
-      settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
-    const stagingStatus = await fetch(`${stagingUrl}/app/api/modder/kofi`, { headers: cookie });
-    const enabled = await stagingStatus.json();
-    assert.equal(enabled.testModeEnabled, true);
-    assert.equal(enabled.testUrl, `https://renobot.example/test/kofi/${endpointId}`);
+    assert.equal(disabled.prodUrl, `https://renobot.example/prod/kofi/${endpointId}`);
+    assert.equal(disabled.lastWebhookAt, '2026-09-28T12:00:00.000Z');
+    assert.equal(disabled.devUrl, undefined);
   });
 
-  it('streams only verified test summaries to the current authorized integration owner', async () => {
+  it('records only verified prod receipts and scopes entry reads and SSE to the modder', async () => {
+    const key = Buffer.alloc(32, 7);
+    const endpointId = 'z'.repeat(43);
+    const integration = { id: 'owned-integration', accountId: 'account', endpointId,
+      verificationTokenCiphertext: '' };
+    integration.verificationTokenCiphertext = encryptSetting('secret', key,
+      integrationSecretOwner(integration), 'verification-token');
+    /** @type {import('../src/kofi-ingestion.js').KofiPayment[]} */
+    const receipts = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      getIntegration: async (/** @type {string} */ id) => id === 'owner' ? integration : null,
+      findIntegrationByEndpoint: async (/** @type {string} */ id) => id === endpointId ? integration : null,
+      recordKofiReceipt: async (/** @type {string} */ id, /** @type {string} */ ciphertext,
+        /** @type {import('../src/kofi-ingestion.js').KofiPayment} */ payment) => {
+        assert.equal(id, integration.id);
+        assert.equal(ciphertext, integration.verificationTokenCiphertext);
+        if (receipts.some((entry) => entry.messageId === payment.messageId)) return 'duplicate';
+        receipts.push(payment);
+        return 'accepted';
+      },
+      listKofiEntries: async (/** @type {string} */ owner) => ({ entries: owner === 'owner' ? receipts.map((payment) => ({
+        id: payment.messageId, messageId: payment.messageId, transactionId: payment.transactionId,
+        eventType: payment.eventType, amount: { toFixed: () => payment.amount },
+        currency: payment.currency, subscriptionPayment: payment.subscriptionPayment,
+        firstSubscriptionPayment: payment.firstSubscriptionPayment, tierName: payment.tierName,
+        supporterDiscordUserId: payment.supporterDiscordUserId, occurredAt: payment.occurredAt,
+        receivedAt: new Date('2026-09-29T00:00:00Z'), outcome: 'recorded-no-entitlement',
+      })) : [], nextCursor: null }),
+      recordKofiPayment: () => { throw new Error('No entitlement ingestion'); },
+    }));
+    const baseUrl = await startServer({ database,
+      settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
+    const cookie = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
+    assert.equal((await fetch(`${baseUrl}/app/api/modder/kofi/entries`)).status, 401);
+    const stream = await fetch(`${baseUrl}/app/api/modder/kofi/events`, { headers: cookie });
+    const reader = stream.body?.getReader();
+    assert.ok(reader);
+    try {
+      assert.match(new TextDecoder().decode((await reader.read()).value), /: connected/u);
+      const send = (/** @type {string} */ token) => fetch(`${baseUrl}/prod/kofi/${endpointId}`, {
+        method: 'POST', body: new URLSearchParams({ data: JSON.stringify({
+          verification_token: token, message_id: 'unique', kofi_transaction_id: 'transaction',
+          timestamp: '2026-09-29T01:31:20Z', type: 'Subscription', amount: '6.00', currency: 'USD',
+          is_subscription_payment: true, discord_userid: '12345678901234567',
+          email: 'private@example.com', message: 'never display',
+        }) }),
+      });
+      assert.equal((await send('wrong')).status, 403);
+      assert.equal(receipts.length, 0);
+      assert.equal((await send('secret')).status, 200);
+      const notice = new TextDecoder().decode((await reader.read()).value);
+      assert.match(notice, /event: receipt/u);
+      assert.doesNotMatch(notice, /private@example|never display|secret|12345678901234567/u);
+      assert.equal((await send('secret')).status, 200);
+      assert.equal(receipts.length, 1);
+      const listed = await fetch(`${baseUrl}/app/api/modder/kofi/entries`, { headers: cookie });
+      const { entries } = await listed.json();
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0].supporterDiscordUserId, '12345678901234567');
+      assert.equal(entries[0].transactionId, 'transaction');
+      assert.equal(entries[0].outcome, 'recorded-no-entitlement');
+      assert.doesNotMatch(JSON.stringify(entries), /private@example|never display|secret/u);
+      assert.equal((await fetch(`${baseUrl}/app/api/modder/kofi/entries?before=${'x'.repeat(65)}`,
+        { headers: cookie })).status, 400);
+    } finally {
+      await reader.cancel();
+    }
+  });
+
+  it('does not acknowledge a verified prod delivery when the ledger write fails', async () => {
+    const key = Buffer.alloc(32, 7);
+    const endpointId = 'p'.repeat(43);
+    const integration = { id: 'owner-integration', accountId: 'account', endpointId,
+      verificationTokenCiphertext: '' };
+    integration.verificationTokenCiphertext = encryptSetting('secret', key,
+      integrationSecretOwner(integration), 'verification-token');
+    let attempts = 0;
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      findIntegrationByEndpoint: async () => integration,
+      recordKofiReceipt: async () => { attempts++; throw new Error('disk unavailable'); },
+    }));
+    const baseUrl = await startServer({ ready: false, database,
+      settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
+    const send = () => fetch(`${baseUrl}/prod/kofi/${endpointId}`, { method: 'POST', body: new URLSearchParams({
+      data: JSON.stringify({ verification_token: 'secret', message_id: 'payment',
+        kofi_transaction_id: 'tx', timestamp: '2026-09-29T01:31:20Z', type: 'Donation',
+        amount: '5.00', currency: 'USD' }),
+    }) });
+    assert.equal((await send()).status, 502);
+    assert.equal((await send()).status, 502);
+    assert.equal(attempts, 2);
+  });
+
+  it('streams only verified receipt notices to the current authorized integration owner', async () => {
     const key = Buffer.alloc(32, 7);
     const endpoints = ['a'.repeat(43), 'b'.repeat(43)];
     const owners = ['alpha', 'beta'];
@@ -234,10 +337,10 @@ describe('dashboard routes', () => {
     }));
     const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
       getIntegration: async (/** @type {string} */ id) => integrations[owners.indexOf(id)] ?? null,
-      findTestIntegrationByEndpoint: async (/** @type {string} */ id) => integrations[endpoints.indexOf(id)] ?? null,
-      recordKofiTest: async () => true,
+      findIntegrationByEndpoint: async (/** @type {string} */ id) => integrations[endpoints.indexOf(id)] ?? null,
+      recordKofiReceipt: async () => 'accepted',
     }));
-    const baseUrl = await startServer({ bot, database, config: { ...config, modderRoleId: 'modder', kofiTestMode: true },
+    const baseUrl = await startServer({ bot, database, config: { ...config, modderRoleId: 'modder' },
       settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
     const stream = (/** @type {string} */ id) => fetch(`${baseUrl}/app/api/modder/kofi/events`, {
       headers: { Cookie: `renobot_session=${createSession({ id, username: id }, secret)}` },
@@ -253,7 +356,7 @@ describe('dashboard routes', () => {
     try {
       assert.match(new TextDecoder().decode((await alphaReader.read()).value), /: connected/u);
       assert.match(new TextDecoder().decode((await betaReader.read()).value), /: connected/u);
-      const send = (/** @type {string} */ endpointId, /** @type {string} */ amount, /** @type {string} */ token = 'secret') => fetch(`${baseUrl}/test/kofi/${endpointId}`, {
+      const send = (/** @type {string} */ endpointId, /** @type {string} */ amount, /** @type {string} */ token = 'secret') => fetch(`${baseUrl}/prod/kofi/${endpointId}`, {
         method: 'POST', body: new URLSearchParams({ data: JSON.stringify({ verification_token: token,
           message_id: 'test', kofi_transaction_id: 'transaction', timestamp: '2026-09-18T01:31:20Z',
           type: 'Donation', amount, currency: 'USD', email: 'private@example.com', message: 'do not send',
@@ -262,12 +365,11 @@ describe('dashboard routes', () => {
       assert.equal((await send(endpoints[0] ?? '', '3.00', 'wrong')).status, 403);
       assert.equal((await send(endpoints[0] ?? '', '3.00')).status, 200);
       const alphaEvent = new TextDecoder().decode((await alphaReader.read()).value);
-      assert.match(alphaEvent, /event: test-delivery/u);
-      assert.match(alphaEvent, /"amount":"3.00"/u);
-      assert.doesNotMatch(alphaEvent, /private@example|do not send|"verificationToken"|"messageId"/u);
+      assert.match(alphaEvent, /event: receipt/u);
+      assert.doesNotMatch(alphaEvent, /private@example|do not send|"verificationToken"|"messageId"|3\.00/u);
       assert.equal((await send(endpoints[1] ?? '', '7.00')).status, 200);
       const betaEvent = new TextDecoder().decode((await betaReader.read()).value);
-      assert.match(betaEvent, /"amount":"7.00"/u);
+      assert.match(betaEvent, /event: receipt/u);
       assert.doesNotMatch(betaEvent, /3\.00|private@example/u);
       alphaAllowed = false;
       assert.equal((await send(endpoints[0] ?? '', '4.00')).status, 200);
@@ -313,8 +415,8 @@ describe('dashboard routes', () => {
     const saved = await post(data);
     assert.equal(saved.status, 200);
     assert.deepEqual(await saved.json(), { configured: false, minimumAmount: '5.00', currency: 'USD',
-      floor: '5.00', testModeEnabled: false, hasVerificationToken: false, hasForwardUrl: false, active: false,
-      testUrl: null, lastTestAt: null });
+      floor: '5.00', hasVerificationToken: false, hasForwardUrl: false, active: false,
+      prodUrl: null, lastWebhookAt: null });
     assert.equal(writes.length, 1);
     assert.deepEqual(/** @type {any} */ (writes[0]).user, { id: 'member', username: 'member' });
     const settings = /** @type {any} */ (writes[0]).settings;
@@ -360,8 +462,8 @@ describe('dashboard routes', () => {
     const result = await fetch(`${baseUrl}/app/api/modder/kofi`, { headers: cookie });
     assert.equal(result.status, 200);
     assert.deepEqual(await result.json(), { configured: true, minimumAmount: '7.50', currency: 'USD',
-      floor: '5.00', testModeEnabled: false, hasVerificationToken: true, hasForwardUrl: true, active: false,
-      testUrl: null, lastTestAt: null });
+      floor: '5.00', hasVerificationToken: true, hasForwardUrl: true, active: false,
+      prodUrl: 'https://renobot.example/prod/kofi/private-endpoint', lastWebhookAt: null });
   });
 
   it('returns 404 for unavailable app pages regardless of cookies', async () => {

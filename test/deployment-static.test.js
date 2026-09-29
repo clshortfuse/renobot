@@ -43,18 +43,18 @@ describe('public static deployment', () => {
     assert.ok(deploy.indexOf('install -d -m 0700 data') < deploy.indexOf('prisma migrate deploy'));
   });
 
-  it('passes only validated GitHub environment test mode into Compose and restores it on rollback', () => {
+  it('keeps the payment listener available if Discord is not ready', () => {
+    const startup = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+    assert.ok(startup.indexOf('webServer.listen') < startup.indexOf('void connectBot();'));
+    assert.match(startup, /Discord login failed; webhook receipts remain available, retrying/u);
+    assert.match(compose, /fetch\('http:\/\/127\.0\.0\.1:3000\/health\/webhook'\)/u);
+  });
+
+  it('deploys the image and encryption key without an environment test-mode switch', () => {
     assert.match(workflow, /environment: production/u);
-    assert.match(workflow, /KOFI_TEST_MODE_VARIABLE: \$\{\{ vars\.KOFI_TEST_MODE \}\}/u);
-    assert.match(workflow, /KOFI_TEST_MODE_SECRET: \$\{\{ secrets\.KOFI_TEST_MODE \}\}/u);
-    assert.match(workflow, /"\$KOFI_TEST_MODE_VARIABLE" != "\$KOFI_TEST_MODE_SECRET"/u);
-    assert.match(workflow, /mode=\$\{KOFI_TEST_MODE_VARIABLE:-\$\{KOFI_TEST_MODE_SECRET:-false\}\}/u);
-    assert.match(workflow, /Ko-fi test mode is not configured; defaulting to false/u);
-    assert.match(workflow, /"\$mode" != true && "\$mode" != false/u);
-    assert.match(workflow, /printf '%s\\n' "\$KOFI_ENCRYPTION_KEY" \| ssh production \/opt\/renobot\/deploy\.sh "\$IMAGE" "\$mode"/u);
-    assert.match(deploy, /"\$\{2:-false\}" != true && "\$\{2:-false\}" != false/u);
-    assert.match(compose, /KOFI_TEST_MODE: \$\{KOFI_TEST_MODE:-false\}/u);
-    assert.match(deploy, /"\$previous_image" "\$previous_test_mode" "\$previous_key" > \.deploy\.env\s+chmod 600 \.deploy\.env/u);
+    assert.doesNotMatch(workflow + deploy + compose, /KOFI_TEST_MODE/u);
+    assert.match(workflow, /printf '%s\\n' "\$KOFI_ENCRYPTION_KEY" \| ssh production \/opt\/renobot\/deploy\.sh "\$IMAGE"/u);
+    assert.match(deploy, /"\$previous_image" "\$previous_key" > \.deploy\.env\s+chmod 600 \.deploy\.env/u);
   });
 
   it('supplies the GitHub Ko-fi secret privately and guards against losing encrypted settings', () => {
