@@ -24,6 +24,91 @@ after(async () => { await client.$disconnect(); });
 function discordId() { return `10${randomInt(10000000, 100000000)}${randomInt(10000000, 100000000)}`; }
 
 describe('SQLite migrations and repositories', () => {
+  it('links historical subscription receipts without granting access or queueing roles', async () => {
+    const database = createPortalDatabase(client);
+    const owner = { id: discordId(), username: 'subscription-modder' };
+    const supporter = { id: discordId(), username: 'subscription-supporter' };
+    const email = `${randomUUID()}@example.test`;
+    const key = Buffer.alloc(32, 7);
+    const integration = await database.saveIntegration(owner, { minimumAmount: '5.00', currency: 'USD',
+      verificationToken: 'secret', forwardUrlAction: 'keep', forwardUrl: '' }, key);
+    await database.saveLogin(supporter);
+    await database.verifyDiscordEmail(supporter.id, email);
+    try {
+      for (const days of [60, 2]) {
+        const occurredAt = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const payload = { ...membership, verification_token: 'secret', message_id: randomUUID(),
+          timestamp: occurredAt.toISOString(), discord_userid: null, email, amount: '5.00' };
+        assert.equal(await receiveKofiReceipt(database, key, integration.endpointId,
+          new URLSearchParams({ data: JSON.stringify(payload) }).toString(), undefined, '5.00'), 'accepted');
+        assert.equal((await database.supporterAccount(supporter.id)).entries.length, days === 60 ? 0 : 1);
+        assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', false), { linked: 1, more: false });
+        const leases = await database.activeSupporterLeases(supporter.id, new Date());
+        assert.equal(leases.length, 0);
+        assert.equal(await client.supporterRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
+        assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
+      }
+      assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', false), { linked: 0, more: false });
+      assert.equal((await database.supporterAccount(supporter.id)).entries.length, 2);
+    } finally {
+      await client.supporterRoleSync.deleteMany({ where: { discordUserId: supporter.id } });
+      await client.kofiEntitlement.deleteMany({ where: { integrationId: integration.id } });
+      await client.kofiEvent.deleteMany({ where: { integrationId: integration.id } });
+      await client.kofiIntegration.delete({ where: { id: integration.id } });
+      await client.account.deleteMany({ where: { discordUserId: { in: [owner.id, supporter.id] } } });
+    }
+  });
+  it('owns multiple verified emails and links only unassigned matching payments once', async () => {
+    const database = createPortalDatabase(client);
+    const supporter = { id: discordId(), username: 'email-supporter' };
+    const other = { id: discordId(), username: 'other-supporter' };
+    const owner = { id: discordId(), username: 'email-modder' };
+    const key = Buffer.alloc(32, 7);
+    const firstEmail = `${randomUUID()}@example.test`;
+    const secondEmail = `${randomUUID()}@example.test`;
+    const integration = await database.saveIntegration(owner, { minimumAmount: '5.00', currency: 'USD',
+      verificationToken: 'secret', forwardUrlAction: 'keep', forwardUrl: '' }, key);
+    await database.saveLogin(supporter);
+    await database.saveLogin(other);
+    try {
+      assert.equal(await database.verifyDiscordEmail(supporter.id, ` ${firstEmail.toUpperCase()} `), true);
+      assert.equal(await database.verifyDiscordEmail(supporter.id, secondEmail), true);
+      assert.equal(await database.verifyDiscordEmail(supporter.id, firstEmail), true);
+      assert.equal(await database.verifyDiscordEmail(other.id, firstEmail), false);
+      assert.equal((await database.supporterAccount(supporter.id)).emails.length, 2);
+      const oldDate = new Date('2024-01-01T00:00:00Z');
+      for (const [message, email, discord] of [
+        ['first', firstEmail, null], ['second', secondEmail, null],
+        ['owned', firstEmail, other.id], ['unknown', `${randomUUID()}@example.test`, null],
+        ['discord-only', null, supporter.id],
+      ]) {
+        await client.kofiEvent.create({ data: { integrationId: integration.id, messageId: /** @type {string} */ (message),
+          transactionId: /** @type {string} */ (message), eventType: 'Donation', amount: '5.00', currency: 'USD',
+          subscriptionPayment: false, firstSubscriptionPayment: false,
+          occurredAt: oldDate, receivedAt: oldDate, supporterEmail: email ?? null, supporterDiscordUserId: discord ?? null,
+          outcome: 'recorded-no-entitlement' } });
+      }
+      assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', true), { linked: 2, more: false });
+      assert.deepEqual(await database.linkEmailPayments(supporter.id, 'USD', true), { linked: 0, more: false });
+      const account = await database.supporterAccount(supporter.id);
+      assert.equal(account.entries.length, 3);
+      assert.equal(account.balance?.totalAmount.toFixed(2), '10.00');
+      assert.ok(account.balance?.expiresAt && account.balance.expiresAt < new Date());
+      assert.equal(await client.earlyAccessCredit.count({ where: { discordUserId: supporter.id } }), 2);
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
+      const otherAccount = await database.supporterAccount(other.id);
+      assert.equal(otherAccount.entries.length, 1);
+      assert.equal(otherAccount.entries[0]?.messageId, 'owned');
+      assert.equal((await database.supporterAccount(supporter.id, otherAccount.entries[0]?.id)).entries.length, 0);
+    } finally {
+      await client.earlyAccessCredit.deleteMany({ where: { discordUserId: supporter.id } });
+      await client.earlyAccessPeriod.deleteMany({ where: { discordUserId: supporter.id } });
+      await client.earlyAccessBalance.deleteMany({ where: { discordUserId: supporter.id } });
+      await client.kofiEvent.deleteMany({ where: { integrationId: integration.id } });
+      await client.kofiIntegration.delete({ where: { id: integration.id } });
+      await client.account.deleteMany({ where: { discordUserId: { in: [owner.id, supporter.id, other.id] } } });
+    }
+  });
   it('never grants Early Access to the hardcoded test Discord ID', async () => {
     const database = createPortalDatabase(client);
     const owner = { id: discordId(), username: 'test-modder' };
@@ -368,7 +453,7 @@ describe('SQLite migrations and repositories', () => {
       assert.ok(page.entries[0]?.integration.account.lastKnownUsername);
       assert.equal((await database.listAdminKofiEntries(page.entries[0]?.id)).entries.length, 1);
       assert.deepEqual(await database.listAdminKofiEntries('not-a-cursor'), { entries: [], nextCursor: null });
-      assert.doesNotMatch(JSON.stringify(page), /fixture-token|jo\.example@example\.com|Jo Example/u);
+      assert.doesNotMatch(JSON.stringify(page), /fixture-token|Jo Example/u);
       assert.equal((await database.listKofiEntries(users[0]?.id ?? '')).entries.length, 1);
     } finally {
       const ids = users.map((user) => user.id);
@@ -430,7 +515,8 @@ describe('SQLite migrations and repositories', () => {
         assert.equal((await reopened.listKofiEntries(owner.id)).entries.length, 50);
         assert.equal((await reopened.listKofiEntries(other.id)).entries.length, 0);
       } finally { await reopened.disconnect(); }
-      assert.doesNotMatch(JSON.stringify(await repository.listKofiEntries(owner.id)), /jo\.example@example\.com|Jo Example|Jo#4105|fixture-token/u);
+      assert.equal(receipt?.supporterEmail, 'jo.example@example.com');
+      assert.doesNotMatch(JSON.stringify(await repository.listKofiEntries(owner.id)), /Jo Example|Jo#4105|fixture-token/u);
       assert.equal(await client.kofiEntitlement.count({ where: { integrationId: integration.id } }), 0);
       assert.equal(await client.supporterRoleSync.count(), 0);
       assert.equal(await client.kofiForwardDelivery.count({ where: { event: { integrationId: integration.id } } }), 0);
@@ -474,7 +560,8 @@ describe('SQLite migrations and repositories', () => {
       assert.ok((await client.kofiIntegration.findUniqueOrThrow({ where: { id: first.id } })).lastWebhookAt);
       const event = await client.kofiEvent.findFirstOrThrow({ where: { integrationId: first.id } });
       assert.equal(event.outcome, 'recorded-no-entitlement');
-      assert.doesNotMatch(JSON.stringify(event), /private@example\.com|private payment note|secret/u);
+      assert.equal(event.supporterEmail, 'private@example.com');
+      assert.doesNotMatch(JSON.stringify(event), /private payment note|secret/u);
       assert.equal(await client.kofiEntitlement.count({ where: { integrationId: first.id } }), 0);
       assert.equal(await client.supporterRoleSync.count(), 0);
       assert.equal(await client.kofiForwardDelivery.count({ where: { event: { integrationId: first.id } } }), 0);
@@ -581,7 +668,8 @@ describe('SQLite migrations and repositories', () => {
     const rows = await client.$queryRaw`SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
     assert.deepEqual(new Set(/** @type {{migration_name: string}[]} */ (rows).map((row) => row.migration_name)),
       new Set(['20260928000000_sqlite_portal', '20260929000000_managed_supporter_role',
-        '20260929010000_kofi_delivery_source', '20260929020000_early_access_periods']));
+        '20260929010000_kofi_delivery_source', '20260929020000_early_access_periods',
+        '20260929030000_verified_account_emails']));
     const id = discordId();
     const database = await connectPortalDatabase(url);
     assert.ok(database);

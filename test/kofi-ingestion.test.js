@@ -35,8 +35,10 @@ describe('inactive Ko-fi ingestion core', () => {
     assert.deepEqual(parsed, { verificationToken: 'secret', messageId: 'payment-1', transactionId: 'transaction-1',
       eventType: 'Subscription', amount: '5.00', currency: 'USD', subscriptionPayment: true,
       firstSubscriptionPayment: false, occurredAt: new Date('2026-09-18T01:31:20Z'),
-      supporterDiscordUserId: '012345678901234567', tierName: 'Bronze' });
-    assert.doesNotMatch(JSON.stringify(parsed), /private@example\.com|private payment note|Private Person/u);
+      supporterDiscordUserId: '012345678901234567', tierName: 'Bronze', supporterEmail: 'private@example.com' });
+    assert.doesNotMatch(JSON.stringify(parsed), /private payment note|Private Person/u);
+    assert.equal(parseKofiPayment(form({ ...payload, email: ' PRIVATE@EXAMPLE.COM ' }))?.supporterEmail, 'private@example.com');
+    assert.equal(parseKofiPayment(form({ ...payload, email: 'not-email' }))?.supporterEmail, undefined);
     assert.equal(parseKofiPayment(form({ ...payload, future_field: 'allowed' }))?.messageId, 'payment-1');
     assert.equal(parseKofiPayment(form({ ...payload, is_subscription_payment: undefined }))?.subscriptionPayment, false);
     assert.equal(parseKofiPayment(form({ ...payload, email: 'not-email', shipping: 'unexpected' }))?.messageId, 'payment-1');
@@ -52,7 +54,8 @@ describe('inactive Ko-fi ingestion core', () => {
     assert.equal(parsed.supporterDiscordUserId, '012345678901234567');
     assert.equal(parsed.tierName, 'Bronze');
     assert.equal(parsed.subscriptionPayment, true);
-    assert.doesNotMatch(JSON.stringify(parsed), /jo\.example@example\.com|Jo Example|Jo#4105/u);
+    assert.equal(parsed.supporterEmail, 'jo.example@example.com');
+    assert.doesNotMatch(JSON.stringify(parsed), /Jo Example|Jo#4105/u);
     const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
       findIntegrationByEndpoint: async () => ({ ...integration,
         verificationTokenCiphertext: encryptSetting('fixture-token', key, integrationSecretOwner(integration), 'verification-token') }),

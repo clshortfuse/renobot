@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { addCalendarMonths, newlyEarnedMonths, testSupporterDiscordUserId } from './early-access.js';
 import { encryptSetting, integrationSecretOwner } from './modder-settings.js';
+import { normalizeEmail } from './account-email.js';
 
 /** @typedef {Readonly<{ minimumAmount: string, currency: string, verificationToken: string,
  *   forwardUrlAction: 'keep' | 'replace' | 'clear', forwardUrl: string }>} IntegrationSettings */
@@ -11,6 +12,9 @@ export class MissingVerificationTokenError extends Error {}
 /**
  * @typedef {Readonly<{
  *   saveLogin: (user: { id: string, username: string }) => Promise<void>,
+ *   verifyDiscordEmail: (discordUserId: string, email: string) => Promise<boolean>,
+ *   supporterAccount: (discordUserId: string, before?: string) => Promise<{ emails: import('@prisma/client').AccountEmail[], balance: import('@prisma/client').EarlyAccessBalance | null, entries: (import('@prisma/client').KofiEvent & { integration: { account: { lastKnownUsername: string } } })[], nextCursor: string | null }>,
+ *   linkEmailPayments: (discordUserId: string, currency: string, earlyAccessEnabled: boolean) => Promise<{ linked: number, more: boolean }>,
  *   getIntegration: (discordUserId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   findIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   findEnabledIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
@@ -149,6 +153,60 @@ export function createPortalDatabase(client) {
         where: { discordUserId: id },
         create: { discordUserId: id, lastKnownUsername: username, lastLoginAt: now },
         update: { lastKnownUsername: username, lastLoginAt: now },
+      });
+    },
+    async verifyDiscordEmail(discordUserId, email) {
+      const normalized = normalizeEmail(email);
+      if (!normalized) return false;
+      const account = await client.account.findUniqueOrThrow({ where: { discordUserId }, select: { id: true } });
+      // Unique ownership: a later verification must never transfer an address.
+      try {
+        await client.accountEmail.create({ data: { accountId: account.id, email: normalized,
+          verifiedBy: 'discord', verifiedAt: new Date() } });
+        return true;
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          return (await client.accountEmail.findUnique({ where: { email: normalized } }))?.accountId === account.id;
+        }
+        throw error;
+      }
+    },
+    async supporterAccount(discordUserId, before) {
+      const [emails, balance] = await Promise.all([
+        client.accountEmail.findMany({ where: { account: { discordUserId } }, orderBy: { verifiedAt: 'asc' } }),
+        client.earlyAccessBalance.findUnique({ where: { discordUserId } }),
+      ]);
+      const cursor = before ? await client.kofiEvent.findFirst({ where: { id: before, supporterDiscordUserId: discordUserId },
+        select: { id: true, receivedAt: true } }) : null;
+      if (before && !cursor) return { emails, balance, entries: [], nextCursor: null };
+      const rows = await client.kofiEvent.findMany({ where: { supporterDiscordUserId: discordUserId,
+        ...(cursor ? { OR: [{ receivedAt: { lt: cursor.receivedAt } },
+          { receivedAt: cursor.receivedAt, id: { lt: cursor.id } }] } : {}) },
+      include: { integration: { select: { account: { select: { lastKnownUsername: true } } } } },
+      orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }], take: 51 });
+      const entries = rows.slice(0, 50);
+      return { emails, balance, entries, nextCursor: rows.length > 50 ? entries.at(-1)?.id ?? null : null };
+    },
+    async linkEmailPayments(discordUserId, currency, earlyAccessEnabled) {
+      return client.$transaction(async (tx) => {
+        const emails = await tx.accountEmail.findMany({ where: { account: { discordUserId } }, select: { email: true } });
+        const rows = await tx.kofiEvent.findMany({ where: { supporterDiscordUserId: null,
+          supporterEmail: { in: emails.map((entry) => entry.email) } },
+        orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }], take: 51 });
+        let linked = 0;
+        for (const event of rows.slice(0, 50)) {
+          const changed = await tx.kofiEvent.updateMany({ where: { id: event.id, supporterDiscordUserId: null },
+            data: { supporterDiscordUserId: discordUserId } });
+          if (!changed.count) continue;
+          linked++;
+          const linkedEvent = { ...event, supporterDiscordUserId: discordUserId };
+          // Historical attribution never starts a fresh access period or bypasses owner approval.
+          if (earlyAccessEnabled && event.currency === currency && ['Donation', 'Subscription'].includes(event.eventType)
+            && event.occurredAt.getTime() <= event.receivedAt.getTime() + 5 * 60_000) {
+            await creditEarlyAccess(tx, linkedEvent, event.receivedAt, false);
+          }
+        }
+        return { linked, more: rows.length > 50 };
       });
     },
     async getIntegration(discordUserId) {
@@ -351,6 +409,7 @@ export function createPortalDatabase(client) {
             subscriptionPayment: payment.subscriptionPayment,
             firstSubscriptionPayment: payment.firstSubscriptionPayment,
             occurredAt: payment.occurredAt, supporterDiscordUserId: payment.supporterDiscordUserId,
+            supporterEmail: payment.supporterEmail ? normalizeEmail(payment.supporterEmail) : null,
             tierName: payment.tierName, outcome: 'recorded-no-entitlement',
             sourceIp: source?.ip ?? null, sourcePort: source?.port ?? null,
             sourceViaProxy: source?.viaProxy ?? false, peerIp: source?.peerIp ?? null,
@@ -370,7 +429,6 @@ export function createPortalDatabase(client) {
         const expiresAt = new Date(payment.occurredAt.getTime() + 35 * 24 * 60 * 60 * 1000);
         if (membershipFloor && payment.subscriptionPayment && payment.supporterDiscordUserId
           && payment.currency === integration.currency
-          && new Prisma.Decimal(payment.amount).gte(integration.minimumAmount)
           && new Prisma.Decimal(payment.amount).gte(membershipFloor)
           && payment.occurredAt.getTime() <= now.getTime() + 5 * 60_000 && expiresAt > now) {
           const where = { integrationId_discordUserId: { integrationId, discordUserId: payment.supporterDiscordUserId } };
@@ -409,6 +467,7 @@ export function createPortalDatabase(client) {
             subscriptionPayment: payment.subscriptionPayment,
             firstSubscriptionPayment: payment.firstSubscriptionPayment,
             occurredAt: payment.occurredAt, supporterDiscordUserId: payment.supporterDiscordUserId,
+            supporterEmail: payment.supporterEmail ? normalizeEmail(payment.supporterEmail) : null,
             tierName: payment.tierName, outcome: 'recorded-no-entitlement',
           } });
           return 'accepted';

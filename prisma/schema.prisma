@@ -15,8 +15,21 @@ model Account {
   updatedAt         DateTime       @updatedAt @map("updated_at")
   lastLoginAt       DateTime       @map("last_login_at")
   kofiIntegration   KofiIntegration?
+  emails            AccountEmail[]
 
   @@map("account")
+}
+
+model AccountEmail {
+  id             String   @id @default(cuid())
+  accountId      String   @map("account_id")
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  email          String   @unique(map: "account_email_email_key")
+  verifiedBy     String   @map("verified_by")
+  verifiedAt     DateTime @map("verified_at")
+
+  @@index([accountId], map: "account_email_account_id_idx")
+  @@map("account_email")
 }
 
 model KofiIntegration {
@@ -48,6 +61,7 @@ model KofiEvent {
   transactionId            String               @map("transaction_id")
   eventType                String               @map("event_type")
   supporterDiscordUserId   String?              @map("supporter_discord_user_id")
+  supporterEmail           String?              @map("supporter_email")
   amount                   Decimal
   currency                 String
   subscriptionPayment      Boolean              @map("subscription_payment")
@@ -68,6 +82,7 @@ model KofiEvent {
   @@unique([integrationId, messageId], map: "kofi_event_integration_id_message_id_key")
   @@unique([id, integrationId], map: "kofi_event_id_integration_id_key")
   @@index([supporterDiscordUserId], map: "kofi_event_supporter_discord_user_id_idx")
+  @@index([supporterEmail, supporterDiscordUserId], map: "kofi_event_email_discord_id_idx")
   @@index([receivedAt], map: "kofi_event_received_at_idx")
   @@map("kofi_event")
 }

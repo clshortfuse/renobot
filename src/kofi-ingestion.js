@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 import { decryptSetting, integrationSecretOwner } from './modder-settings.js';
+import { normalizeEmail } from './account-email.js';
 
 const require = createRequire(import.meta.url);
 const Ajv2020 = /** @type {typeof import('ajv/dist/2020.js').default} */ (require('ajv/dist/2020.js'));
@@ -15,7 +16,7 @@ export const maxKofiBodyBytes = 256 * 1024;
 /** @typedef {Readonly<{ verificationToken: string, messageId: string, transactionId: string,
  *   eventType: string, amount: string, currency: string, subscriptionPayment: boolean,
  *   firstSubscriptionPayment: boolean, occurredAt: Date, supporterDiscordUserId: string | null,
- *   tierName: string | null }>} KofiPayment */
+ *   tierName: string | null, supporterEmail?: string | null }>} KofiPayment */
 /** @typedef {Readonly<{ ip: string | null, port: number | null, viaProxy: boolean,
  *   peerIp: string | null, peerPort: number | null }>} KofiDeliverySource */
 
@@ -56,7 +57,9 @@ export function parseKofiPayment(rawBody) {
     transactionId: data.kofi_transaction_id, eventType: data.type, amount: data.amount,
     currency: data.currency, subscriptionPayment: data.is_subscription_payment === true,
     firstSubscriptionPayment: data.is_first_subscription_payment === true,
-    occurredAt, supporterDiscordUserId: data.discord_userid ?? null, tierName: data.tier_name ?? null };
+    occurredAt, supporterDiscordUserId: data.discord_userid ?? null, tierName: data.tier_name ?? null,
+    ...(typeof supplied.email === 'string' && normalizeEmail(supplied.email)
+      ? { supporterEmail: normalizeEmail(supplied.email) } : {}) };
 }
 
 /** @param {string} supplied @param {string} expected */
