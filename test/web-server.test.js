@@ -34,7 +34,7 @@ afterEach(async () => {
  * @param {Readonly<{ ready?: boolean, request?: typeof fetch, bot?: import('discord.js').Client,
  *   config?: import('../src/web-config.js').WebConfig, database?: import('../src/database.js').PortalDatabase,
  *   settingsConfig?: import('../src/modder-settings.js').ModderSettingsConfig,
- *   trustedKofiProxyIp?: string }>} [options]
+ *   trustedKofiProxyIp?: string, supporterRoleId?: string }>} [options]
  */
 async function startServer(options = {}) {
   const logger = { error() {}, warn() {}, info() {} };
@@ -46,6 +46,7 @@ async function startServer(options = {}) {
     ...(options.database ? { database: options.database } : {}),
     ...(options.settingsConfig ? { settingsConfig: options.settingsConfig } : {}),
     ...(options.trustedKofiProxyIp ? { trustedKofiProxyIp: options.trustedKofiProxyIp } : {}),
+    ...(options.supporterRoleId ? { supporterRoleId: options.supporterRoleId } : {}),
   });
   servers.push(server);
   await new Promise((resolve, reject) => {
@@ -234,6 +235,90 @@ describe('dashboard routes', () => {
     }
     assert.deepEqual({ ip: sources[2]?.ip, port: sources[2]?.port, viaProxy: sources[2]?.viaProxy,
       peerIp: sources[2]?.peerIp }, { ip: '198.51.100.42', port: 43210, viaProxy: true, peerIp: '127.0.0.1' });
+  });
+
+  it('shows only the signed-in modder membership leases and recorded role-sync state', async () => {
+    /** @type {string[]} */
+    const owners = [];
+    /** @type {string[]} */
+    const lookups = [];
+    const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({
+      isReady: () => true,
+      users: { fetch: async (/** @type {string} */ id) => {
+        lookups.push(id);
+        return { globalName: 'Preview Supporter', username: 'supporter' };
+      } },
+    }));
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      listKofiMemberships: async (/** @type {string} */ owner, /** @type {string} */ roleId,
+        /** @type {string | undefined} */ before) => {
+        owners.push(owner);
+        assert.equal(roleId, 'role');
+        return { members: before ? [] : [{ discordUserId: '12345678901234567',
+          expiresAt: new Date('2099-10-29T00:00:00Z'), lastPaymentAt: new Date('2026-09-29T00:00:00Z'),
+          roleManaged: true, sync: { nextAttemptAt: new Date('2099-10-29T00:00:00Z'), lastErrorCode: null } }],
+        nextCursor: before ? null : 'lease-id' };
+      },
+    }));
+    const base = await startServer({ bot, database, supporterRoleId: 'role',
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const path = '/app/api/modder/kofi/memberships';
+    const owner = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
+    const member = { Cookie: `renobot_session=${createSession({ id: 'member', username: 'member' }, secret)}` };
+    assert.equal((await fetch(`${base}${path}`)).status, 401);
+    assert.equal((await fetch(`${base}${path}`, { headers: member })).status, 403);
+    assert.equal((await fetch(`${base}${path}?before=%3Cscript%3E`, { headers: owner })).status, 400);
+    const result = await (await fetch(`${base}${path}`, { headers: owner })).json();
+    assert.deepEqual(result.members[0], { discordUserId: '12345678901234567', discordName: 'Preview Supporter', active: true,
+      expiresAt: '2099-10-29T00:00:00.000Z', lastPaymentAt: '2026-09-29T00:00:00.000Z',
+      roleStatus: 'granted-by-renobot', nextAttemptAt: '2099-10-29T00:00:00.000Z' });
+    assert.equal(result.nextCursor, 'lease-id');
+    assert.deepEqual((await (await fetch(`${base}${path}?before=lease-id`, { headers: owner })).json()).members, []);
+    assert.deepEqual(owners, ['owner', 'owner']);
+    assert.deepEqual(lookups, ['12345678901234567']);
+  });
+
+  it('keeps memberships visible when a Discord name lookup fails', async () => {
+    const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({
+      isReady: () => true,
+      users: { fetch: async () => { throw new Error('Discord unavailable'); } },
+    }));
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      listKofiMemberships: async () => ({ members: [{ discordUserId: '12345678901234567',
+        expiresAt: new Date('2099-10-29T00:00:00Z'), lastPaymentAt: new Date('2026-09-29T00:00:00Z'),
+        roleManaged: false, sync: null }], nextCursor: null }),
+    }));
+    const base = await startServer({ bot, database,
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const owner = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
+    const result = await (await fetch(`${base}/app/api/modder/kofi/memberships`, { headers: owner })).json();
+    assert.equal(result.members[0].discordName, null);
+    assert.equal(result.members[0].discordUserId, '12345678901234567');
+  });
+
+  it('checks actual Discord roles only for supporters belonging to the signed-in modder', async () => {
+    let lookups = 0;
+    const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({
+      isReady: () => true, guilds: { fetch: async () => ({ members: { fetch: async () => {
+        lookups++;
+        return { roles: { cache: { has: () => true } } };
+      } } }) },
+    }));
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      hasKofiMembership: async (/** @type {string} */ owner, /** @type {string} */ supporter) =>
+        owner === 'owner' && supporter === '12345678901234567',
+    }));
+    const base = await startServer({ bot, database, supporterRoleId: 'role',
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const path = '/app/api/modder/kofi/memberships/12345678901234567';
+    const owner = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
+    const member = { Cookie: `renobot_session=${createSession({ id: 'member', username: 'member' }, secret)}` };
+    assert.equal((await fetch(`${base}${path}`)).status, 401);
+    assert.equal((await fetch(`${base}${path}`, { headers: member })).status, 403);
+    assert.equal((await fetch(`${base}/app/api/modder/kofi/memberships/23456789012345678`, { headers: owner })).status, 404);
+    assert.equal(lookups, 0);
+    assert.deepEqual(await (await fetch(`${base}${path}`, { headers: owner })).json(), { rolePresent: true });
+    assert.equal(lookups, 1);
   });
 
   it('returns one stable webhook URL for a configured integration', async () => {

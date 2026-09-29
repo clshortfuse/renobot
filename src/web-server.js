@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { isIP } from 'node:net';
+import { DiscordAPIError } from 'discord.js';
 
 import { adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
 import { requiredCapability, resolveCapabilities } from './web-capabilities.js';
@@ -171,7 +172,9 @@ export function createWebServer(options) {
         return;
       }
       if ((url.pathname === '/app/api/modder/kofi' && (incoming.method === 'GET' || incoming.method === 'POST'))
-        || (['/app/api/modder/kofi/events', '/app/api/modder/kofi/entries'].includes(url.pathname) && incoming.method === 'GET')) {
+        || (['/app/api/modder/kofi/events', '/app/api/modder/kofi/entries',
+          '/app/api/modder/kofi/memberships'].includes(url.pathname) && incoming.method === 'GET')
+        || (incoming.method === 'GET' && url.pathname.startsWith('/app/api/modder/kofi/memberships/'))) {
         const token = readCookie(incoming.headers.cookie, sessionCookie);
         const session = readSession(token, options.config.sessionSecret);
         if (!session) {
@@ -191,6 +194,58 @@ export function createWebServer(options) {
         }
         if (!options.database || !options.settingsConfig) {
           sendJson(response, 503, { error: 'Settings are not configured' });
+          return;
+        }
+        if (url.pathname.startsWith('/app/api/modder/kofi/memberships/')) {
+          const supporterId = url.pathname.slice('/app/api/modder/kofi/memberships/'.length);
+          if (!/^\d{17,20}$/u.test(supporterId)) { sendJson(response, 400, { error: 'Invalid supporter ID' }); return; }
+          if (!await options.database.hasKofiMembership(session.id, supporterId)) {
+            sendJson(response, 404, { error: 'Membership not found' }); return;
+          }
+          if (!options.supporterRoleId) { sendJson(response, 200, { rolePresent: null }); return; }
+          try {
+            const guild = await options.bot.guilds.fetch(options.config.guildId);
+            const member = await guild.members.fetch({ user: supporterId, force: true, cache: false });
+            sendJson(response, 200, { rolePresent: member.roles.cache.has(options.supporterRoleId) });
+          } catch (error) {
+            if (error instanceof DiscordAPIError && error.code === 10007) {
+              sendJson(response, 200, { rolePresent: false });
+            } else {
+              options.logger.warn('Supporter role lookup failed');
+              sendJson(response, 503, { error: 'Discord role status is temporarily unavailable' });
+            }
+          }
+          return;
+        }
+        if (url.pathname === '/app/api/modder/kofi/memberships') {
+          const before = url.searchParams.get('before') ?? undefined;
+          if ((before && !/^[A-Za-z0-9_-]{1,64}$/u.test(before)) || url.searchParams.has('before') && !before) {
+            sendJson(response, 400, { error: 'Invalid membership cursor' });
+            return;
+          }
+          const { members, nextCursor } = await options.database.listKofiMemberships(session.id, options.supporterRoleId, before);
+          /** @type {(string | null)[]} */
+          const names = [];
+          for (let index = 0; index < members.length; index += 5) {
+            const batch = await Promise.all(members.slice(index, index + 5).map(async (member) => {
+              try {
+                const user = await options.bot.users.fetch(member.discordUserId);
+                return user.globalName ?? user.username;
+              } catch {
+                return null;
+              }
+            }));
+            names.push(...batch);
+          }
+          const now = Date.now();
+          sendJson(response, 200, { members: members.map((member, index) => ({
+            discordUserId: member.discordUserId, discordName: names[index] ?? null,
+            expiresAt: member.expiresAt.toISOString(),
+            lastPaymentAt: member.lastPaymentAt.toISOString(), active: member.expiresAt.getTime() > now,
+            roleStatus: !options.supporterRoleId ? 'disabled' : member.sync?.lastErrorCode ? 'retrying'
+              : member.roleManaged ? 'granted-by-renobot' : member.sync ? 'pending' : 'not-managed',
+            nextAttemptAt: member.sync?.nextAttemptAt.toISOString() ?? null,
+          })), nextCursor });
           return;
         }
         if (url.pathname === '/app/api/modder/kofi/entries') {

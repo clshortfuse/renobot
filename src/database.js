@@ -16,6 +16,8 @@ export class MissingVerificationTokenError extends Error {}
  *   recordKofiPayment: (integrationId: string, tokenCiphertext: string, payment: import('./kofi-ingestion.js').KofiPayment) => Promise<'rejected' | 'accepted' | 'duplicate'>,
  *   recordKofiReceipt: (integrationId: string, tokenCiphertext: string, payment: import('./kofi-ingestion.js').KofiPayment, membershipFloor?: string, source?: import('./kofi-ingestion.js').KofiDeliverySource) => Promise<'rejected' | 'accepted' | 'duplicate'>,
  *   listKofiEntries: (discordUserId: string, before?: string) => Promise<{ entries: import('@prisma/client').KofiEvent[], nextCursor: string | null }>,
+ *   listKofiMemberships: (discordUserId: string, roleId: string | undefined, before?: string) => Promise<{ members: { discordUserId: string, expiresAt: Date, lastPaymentAt: Date, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
+ *   hasKofiMembership: (modderDiscordUserId: string, supporterDiscordUserId: string) => Promise<boolean>,
  *   listAdminKofiEntries: (before?: string) => Promise<{ entries: (import('@prisma/client').KofiEvent & { integration: { account: { discordUserId: string, lastKnownUsername: string } } })[], nextCursor: string | null }>,
  *   dueSupporterSync: (now: Date) => Promise<import('@prisma/client').SupporterRoleSync | null>,
  *   activeSupporterLeases: (discordUserId: string, now: Date) => Promise<{ expiresAt: Date }[]>,
@@ -77,6 +79,35 @@ export function createPortalDatabase(client) {
         orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }], take: 51 });
       const entries = rows.slice(0, 50);
       return { entries, nextCursor: rows.length > 50 ? entries.at(-1)?.id ?? null : null };
+    },
+    async listKofiMemberships(discordUserId, roleId, before) {
+      const integration = await client.kofiIntegration.findFirst({ where: { account: { discordUserId } }, select: { id: true } });
+      if (!integration) return { members: [], nextCursor: null };
+      const cursor = before ? await client.kofiEntitlement.findFirst({ where: { id: before, integrationId: integration.id },
+        select: { id: true, expiresAt: true } }) : null;
+      if (before && !cursor) return { members: [], nextCursor: null };
+      const rows = await client.kofiEntitlement.findMany({ where: { integrationId: integration.id,
+        ...(cursor ? { OR: [{ expiresAt: { lt: cursor.expiresAt } },
+          { expiresAt: cursor.expiresAt, id: { lt: cursor.id } }] } : {}) },
+      orderBy: [{ expiresAt: 'desc' }, { id: 'desc' }], take: 51 });
+      const page = rows.slice(0, 50);
+      const ids = page.map((row) => row.discordUserId);
+      const [syncs, managed] = await Promise.all([
+        client.supporterRoleSync.findMany({ where: { discordUserId: { in: ids } },
+          select: { discordUserId: true, nextAttemptAt: true, lastErrorCode: true } }),
+        roleId ? client.managedSupporterRole.findMany({ where: { discordUserId: { in: ids }, roleId },
+          select: { discordUserId: true } }) : Promise.resolve([]),
+      ]);
+      const byId = new Map(syncs.map((sync) => [sync.discordUserId, sync]));
+      const managedIds = new Set(managed.map((entry) => entry.discordUserId));
+      return { members: page.map((row) => ({ discordUserId: row.discordUserId,
+        expiresAt: row.expiresAt, lastPaymentAt: row.lastPaymentAt,
+        roleManaged: managedIds.has(row.discordUserId), sync: byId.get(row.discordUserId) ?? null })),
+      nextCursor: rows.length > 50 ? page.at(-1)?.id ?? null : null };
+    },
+    async hasKofiMembership(modderDiscordUserId, supporterDiscordUserId) {
+      return Boolean(await client.kofiEntitlement.findFirst({ where: { discordUserId: supporterDiscordUserId,
+        integration: { account: { discordUserId: modderDiscordUserId } } }, select: { id: true } }));
     },
     async listAdminKofiEntries(before) {
       const cursor = before ? await client.kofiEvent.findUnique({ where: { id: before },

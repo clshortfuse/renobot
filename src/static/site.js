@@ -111,6 +111,93 @@ async function loadSession() {
       /** @type {EventSource | undefined} */
       let events;
       /** @type {string | null} */
+      let membersCursor = null;
+      let membersCount = 0;
+      let membersVersion = 0;
+      /** @param {boolean} [reset] */
+      async function loadMemberships(reset = true) {
+        if (reset) membersVersion++;
+        const version = membersVersion;
+        const cursor = reset ? null : membersCursor;
+        const more = /** @type {HTMLButtonElement} */ (element('kofi-memberships-more'));
+        if (!reset) more.disabled = true;
+        try {
+          const response = await fetch(`/app/api/modder/kofi/memberships${cursor ? `?before=${encodeURIComponent(cursor)}` : ''}`,
+            { credentials: 'same-origin', cache: 'no-store' });
+          if (!response.ok) throw new Error('Memberships unavailable');
+          /** @type {{ members: { discordUserId: string, discordName: string | null, expiresAt: string, lastPaymentAt: string,
+           *   active: boolean, roleStatus: string, nextAttemptAt: string | null }[], nextCursor: string | null }} */
+          const { members, nextCursor } = await response.json();
+          if (version !== membersVersion) return;
+          const items = members.map((member) => {
+            const item = document.createElement('tr');
+            const role = { 'granted-by-renobot': 'Role grant recorded by Renobot',
+              pending: 'Role sync pending', retrying: 'Role sync retrying',
+              'not-managed': 'No Renobot-managed role', disabled: 'Role sync disabled' }[member.roleStatus]
+              ?? 'Role status unavailable';
+            const supporter = document.createElement('td');
+            const name = document.createElement('strong');
+            name.textContent = member.discordName ?? 'Name unavailable';
+            const id = document.createElement('span');
+            id.className = 'membership-detail';
+            id.textContent = member.discordUserId;
+            supporter.append(name, id);
+            const membership = document.createElement('td');
+            const state = document.createElement('span');
+            state.className = `membership-state${member.active ? '' : ' expired'}`;
+            state.textContent = member.active ? 'Active' : 'Expired';
+            const expiry = document.createElement('time');
+            expiry.dateTime = member.expiresAt;
+            expiry.textContent = new Date(member.expiresAt).toLocaleString();
+            membership.append(state, expiry);
+            const payment = document.createElement('td');
+            const paidAt = document.createElement('time');
+            paidAt.dateTime = member.lastPaymentAt;
+            paidAt.textContent = new Date(member.lastPaymentAt).toLocaleString();
+            payment.append(paidAt);
+            const sync = document.createElement('td');
+            sync.textContent = role;
+            if (member.nextAttemptAt) {
+              const next = document.createElement('span');
+              next.className = 'membership-detail';
+              next.textContent = `Next check ${new Date(member.nextAttemptAt).toLocaleString()}`;
+              sync.append(next);
+            }
+            const discord = document.createElement('td');
+            const check = document.createElement('button');
+            check.type = 'button';
+            check.textContent = 'Check Discord role';
+            check.addEventListener('click', () => {
+              if (check.disabled) return;
+              check.disabled = true;
+              void (async () => {
+                try {
+                  const response = await fetch(`/app/api/modder/kofi/memberships/${encodeURIComponent(member.discordUserId)}`,
+                    { credentials: 'same-origin', cache: 'no-store' });
+                  if (!response.ok) throw new Error('Role lookup unavailable');
+                  const { rolePresent } = await response.json();
+                  check.textContent = rolePresent === null ? 'Role sync disabled'
+                    : rolePresent ? 'Discord role present' : 'Discord role absent';
+                } catch { check.textContent = 'Role lookup unavailable; retry'; }
+                finally { check.disabled = false; }
+              })();
+            });
+            discord.append(check);
+            item.append(supporter, membership, payment, sync, discord);
+            return item;
+          });
+          if (reset) { element('kofi-memberships-list').replaceChildren(...items); membersCount = 0; }
+          else element('kofi-memberships-list').append(...items);
+          membersCount += members.length;
+          membersCursor = nextCursor;
+          more.hidden = !nextCursor;
+          element('kofi-memberships-status').textContent = membersCount
+            ? `Memberships shown: ${membersCount}` : 'No qualifying memberships yet.';
+        } catch {
+          if (version === membersVersion) element('kofi-memberships-status').textContent = 'Membership status is temporarily unavailable.';
+        } finally { more.disabled = false; }
+      }
+      /** @type {string | null} */
       let entriesCursor = null;
       let entriesCount = 0;
       let entriesVersion = 0;
@@ -171,6 +258,7 @@ async function loadSession() {
           events.addEventListener('receipt', () => {
             element('kofi-webhook-status').textContent = 'New verified delivery recorded. See entries below.';
             void loadEntries();
+            void loadMemberships();
           });
         }
       };
@@ -182,8 +270,12 @@ async function loadSession() {
       if (access.status === 403) { status.textContent = 'Modder access required.'; return; }
       if (!access.ok) { status.textContent = 'Settings are temporarily unavailable.'; return; }
       showSettings(await access.json());
+      element('kofi-memberships').hidden = false;
+      void loadMemberships();
+      element('kofi-memberships-more').addEventListener('click', () => { void loadMemberships(false); });
+      element('kofi-memberships-refresh').addEventListener('click', () => { void loadMemberships(); });
       element('kofi-entries-more').addEventListener('click', () => { void loadEntries(false); });
-      status.textContent = 'Webhook receipts can be recorded. Check role activation status below; forwarding is inactive.';
+      status.textContent = 'Memberships and role-sync status are shown below. Ko-fi setup is available when needed.';
       form.addEventListener('submit', (event) => {
         event.preventDefault();
         void (async () => {

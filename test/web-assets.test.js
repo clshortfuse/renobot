@@ -134,7 +134,8 @@ describe('static portal assets', () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'kofi-form', 'minimum-amount', 'currency',
       'floor-note', 'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status',
-      'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more']
+      'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more',
+      'kofi-memberships', 'kofi-memberships-status', 'kofi-memberships-list', 'kofi-memberships-more', 'kofi-memberships-refresh']
       .map((id) => [id, { hidden: true, value: '' }]));
     nodes['kofi-form'] = { hidden: true, addEventListener() {} };
     nodes['kofi-entries-more'].addEventListener = () => {};
@@ -146,6 +147,12 @@ describe('static portal assets', () => {
     /** @param {{ textContent: string }[]} items */
     function append(...items) { rendered.push(...items); }
     nodes['kofi-entries-list'].append = append;
+    /** @type {any[]} */
+    let memberships = [];
+    nodes['kofi-memberships-list'].replaceChildren = (/** @type {any[]} */ ...items) => { memberships = items; };
+    nodes['kofi-memberships-list'].append = (/** @type {any[]} */ ...items) => { memberships.push(...items); };
+    nodes['kofi-memberships-more'].addEventListener = () => {};
+    nodes['kofi-memberships-refresh'].addEventListener = () => {};
     /** @type {(() => void) | undefined} */
     let loadOlder;
     nodes['kofi-entries-more'].addEventListener = (/** @type {string} */ event, /** @type {() => void} */ callback) => {
@@ -154,9 +161,14 @@ describe('static portal assets', () => {
     };
     /** @type {(() => void) | undefined} */
     let onReceipt;
+    /** @type {{ textContent: string, click?: () => void, addEventListener: (event: string, callback: () => void) => void } | undefined} */
+    let liveRoleButton;
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id],
-        createElement: () => ({ textContent: '' }) },
+        createElement: (/** @type {string} */ tag) => tag === 'button'
+          ? (liveRoleButton = { textContent: '', addEventListener(/** @type {string} */ event, /** @type {() => void} */ callback) {
+            if (event === 'click') this.click = callback;
+          } }) : ({ tagName: tag, textContent: '', children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...children) { this.children.push(...children); } }) },
       EventSource: class {
         /** @param {string} url */
         constructor(url) { assert.equal(url, '/app/api/modder/kofi/events'); }
@@ -165,6 +177,11 @@ describe('static portal assets', () => {
       },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
         ? { username: '<script>', csrf: 'secret-csrf' }
+        : path === '/app/api/modder/kofi/memberships/%3Cscript%3E' ? { rolePresent: true }
+        : path.startsWith('/app/api/modder/kofi/memberships') ? { members: [{ discordUserId: '<script>',
+          discordName: '<img onerror=alert(1)>',
+          active: true, expiresAt: '2026-10-29T00:00:00Z', lastPaymentAt: '2026-09-29T00:00:00Z',
+          roleStatus: 'granted-by-renobot', nextAttemptAt: null }], nextCursor: null }
         : path.startsWith('/app/api/modder/kofi/entries') ? path.includes('?before=older-id')
           ? { entries: [{ occurredAt: '2026-09-27T12:00:00Z', receivedAt: '2026-09-27T12:00:01Z',
             eventType: 'Donation', transactionId: 'older-tx',
@@ -178,6 +195,18 @@ describe('static portal assets', () => {
           prodUrl: 'https://renobot.example/prod/kofi/private-id', lastWebhookAt: null } }),
     });
     assert.equal(nodes['kofi-form'].hidden, false);
+    assert.equal(nodes['kofi-memberships'].hidden, false);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(memberships[0]?.tagName, 'tr');
+    assert.deepEqual(memberships[0]?.children.map((/** @type {any} */ cell) => cell.tagName), ['td', 'td', 'td', 'td', 'td']);
+    assert.equal(memberships[0]?.children[0]?.children[0]?.textContent, '<img onerror=alert(1)>');
+    assert.equal(memberships[0]?.children[0]?.children[1]?.textContent, '<script>');
+    assert.equal(memberships[0]?.children[1]?.children[0]?.textContent, 'Active');
+    assert.equal(memberships[0]?.children[3]?.textContent, 'Role grant recorded by Renobot');
+    assert.ok(liveRoleButton?.click);
+    liveRoleButton.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(liveRoleButton.textContent, 'Discord role present');
     assert.equal(nodes['token-status'].textContent, 'Token configured (value hidden)');
     assert.equal(nodes['forward-status'].textContent, 'Destination configured (value hidden)');
     assert.equal(nodes['floor-note'].textContent, 'Minimum allowed: 5.00 USD');
@@ -205,13 +234,16 @@ describe('static portal assets', () => {
       /** @type {Record<string, any>} */
       const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
         'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status',
-        'kofi-entries'].map((id) => [id, { hidden: true }]));
+        'kofi-entries', 'kofi-memberships', 'kofi-memberships-status', 'kofi-memberships-list',
+        'kofi-memberships-more', 'kofi-memberships-refresh', 'kofi-entries-more'].map((id) => [id, { hidden: true,
+          addEventListener() {}, replaceChildren() {} }]));
       nodes['kofi-form'] = { hidden: true, addEventListener() {} };
       await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
         document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id] },
         fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
           ? { username: 'owner', csrf: 'csrf' }
-          : { minimumAmount: '5.00', currency: 'USD', floor: '5.00',
+          : path.endsWith('/memberships') ? { members: [], nextCursor: null }
+            : { minimumAmount: '5.00', currency: 'USD', floor: '5.00',
             hasVerificationToken: false, hasForwardUrl: false, prodUrl: null, lastWebhookAt: null } }),
       });
           assert.match(nodes['kofi-webhook-status'].textContent, /Enter your Ko-fi verification token.*save settings/u);
@@ -224,10 +256,14 @@ describe('static portal assets', () => {
     const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
       'token-status', 'forward-status',
       'verification-token', 'forward-action', 'forward-url', 'save-settings',
-      'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status', 'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more']
+      'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status', 'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more',
+      'kofi-memberships', 'kofi-memberships-status', 'kofi-memberships-list', 'kofi-memberships-more', 'kofi-memberships-refresh']
       .map((id) => [id, { value: '', hidden: true, disabled: false }]));
     nodes['kofi-entries-list'].replaceChildren = () => {};
     nodes['kofi-entries-more'].addEventListener = () => {};
+    nodes['kofi-memberships-list'].replaceChildren = () => {};
+    nodes['kofi-memberships-more'].addEventListener = () => {};
+    nodes['kofi-memberships-refresh'].addEventListener = () => {};
     /** @type {((event: { preventDefault: () => void }) => void) | undefined} */
     let submit;
     nodes['kofi-form'] = { hidden: true, addEventListener: (/** @type {string} */ name, /** @type {typeof submit} */ handler) => {
@@ -249,7 +285,8 @@ describe('static portal assets', () => {
       fetch: async (/** @type {string} */ path, /** @type {{ method?: string, body?: URLSearchParams }} */ options) => {
         if (path === '/auth/session') return { ok: true, json: async () => ({ csrf: 'csrf-secret' }) };
         if (options.method === 'POST') posted = options.body;
-        return { ok: true, json: async () => path.endsWith('/entries') ? { entries: [], nextCursor: null }
+        return { ok: true, json: async () => path.endsWith('/memberships') ? { members: [], nextCursor: null }
+          : path.endsWith('/entries') ? { entries: [], nextCursor: null }
           : ({ ...settings, hasVerificationToken: Boolean(posted),
             prodUrl: posted ? 'https://renobot.example/prod/kofi/private-id' : null }) };
       },
