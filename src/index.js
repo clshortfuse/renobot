@@ -1,10 +1,12 @@
 import { createBot } from './bot.js';
+import { isIP } from 'node:net';
 import { loadCommands } from './commands/load-commands.js';
 import { readBotConfig, readCommandRegistrationConfig } from './config.js';
 import { connectPortalDatabase } from './database.js';
 import { createShutdown, installProcessHandlers } from './lifecycle.js';
 import { logger } from './logger.js';
 import { readModderSettingsConfig } from './modder-settings.js';
+import { startSupporterRoleWorker } from './supporter-roles.js';
 import { createReviewCollectionPreview } from './reviews/collection-preview.js';
 import { readWebConfig } from './web-config.js';
 import { createWebServer } from './web-server.js';
@@ -31,9 +33,20 @@ try {
   const webConfig = readWebConfig();
   const settingsConfig = readModderSettingsConfig();
   if (settingsConfig && !database) throw new Error('Modder settings require DATABASE_URL.');
+  const supporterRoleId = process.env.DISCORD_SUPPORTER_ROLE_ID?.trim();
+  const trustedKofiProxyIp = process.env.KOFI_TRUSTED_PROXY_IP?.trim();
+  if (trustedKofiProxyIp && !isIP(trustedKofiProxyIp)) throw new Error('KOFI_TRUSTED_PROXY_IP must be a single IP address.');
+  if (supporterRoleId && (!/^\d{17,20}$/u.test(supporterRoleId) || !settingsConfig || !database)) {
+    throw new Error('DISCORD_SUPPORTER_ROLE_ID requires a Discord role ID and Ko-fi database settings.');
+  }
   const webServer = webConfig ? createWebServer({ bot: client, config: webConfig, logger,
-    ...(database ? { database } : {}), ...(settingsConfig ? { settingsConfig } : {}) }) : undefined;
+    ...(database ? { database } : {}), ...(settingsConfig ? { settingsConfig } : {}),
+    ...(supporterRoleId ? { supporterRoleId } : {}),
+    ...(trustedKofiProxyIp ? { trustedKofiProxyIp } : {}) }) : undefined;
   const shutDown = createShutdown({ client, logger, ...(webServer ? { webServer } : {}), ...(database ? { database } : {}) });
+  const stopSupporterWorker = supporterRoleId && database
+    ? startSupporterRoleWorker(database, client, readCommandRegistrationConfig().guildId, supporterRoleId, logger)
+    : undefined;
   let stopping = false;
   /** @type {NodeJS.Timeout | undefined} */
   let loginRetry;
@@ -42,6 +55,7 @@ try {
     shutDown: async (reason, exitCode) => {
       stopping = true;
       if (loginRetry) clearTimeout(loginRetry);
+      stopSupporterWorker?.();
       await shutDown(reason, exitCode);
     },
   });

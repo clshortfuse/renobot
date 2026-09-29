@@ -70,7 +70,8 @@ publishes receipt-only URLs but does not enable supporter roles. The forwarding 
 but is never contacted by this phase. Only future audited forwarding code may
 send private payment payloads.
 The `/prod/kofi/:endpointId` route verifies and stores deduplicated minimal
-receipts without granting entitlements, roles, or forwarding data.
+receipts without forwarding data. It creates entitlements only when
+`DISCORD_SUPPORTER_ROLE_ID` is explicitly configured.
 It returns success only after the SQLite transaction commits (or a verified
 retry matches an already stored message ID). A database write failure returns a
 non-success response so the sender can retry; do not assume any specific Ko-fi
@@ -82,7 +83,7 @@ Signed-in modders can page through their own stored receipts, newest first;
 the authenticated SSE stream is only a live refresh hint, not the event store.
 There is only one creator URL, `/prod/kofi/:endpointId`, available through the
 authenticated modder settings API. Ko-fi test deliveries and real payments
-are both stored as receipts; no supporter-role processing is enabled. Do not
+are both stored as receipts; supporter-role processing is off by default. Do not
 replace a creator's working webhook without accepting that forwarding is not
 yet available. Authenticated SSE signals new committed receipts so an open
 portal can refresh its ledger. Fan-out is in-process (one replica); a restart
@@ -92,6 +93,52 @@ The SQLite file is still on a single host disk. It is **not** a guarantee
 against host loss, a failed disk, or the sender abandoning a failed delivery;
 off-host encrypted backups and restore drills remain required before treating
 this as a no-loss payment archive.
+
+Membership reconciliation is opt-in through `DISCORD_SUPPORTER_ROLE_ID` in the
+private host environment. When configured, qualifying recurring Ko-fi test and
+real deliveries both renew a creator-specific 35-day lease. The worker grants
+the shared role when any lease is active and removes it only when all leases
+expire **and Renobot recorded that it added the role**. Existing manual role
+grants are not adopted. Provenance is tied to the exact role ID; changing the
+configured role ID requires manually reviewing grants of the old role. The bot
+needs Manage Roles permission and a role above
+the supporter role. Leave this setting unset until real Ko-fi test payments
+granting actual guild roles are acceptable. Payment receipt storage itself
+never waits for Discord. Manual overrides, forwarding, and off-host backups
+remain unavailable.
+
+The intended shared supporter role ID is `1408262950799802409`. Set it as
+`DISCORD_SUPPORTER_ROLE_ID` only in the private host environment when actual
+role grants are approved; this repository does not activate it by default.
+Ko-fi webhook receipts record the first verified delivery's source IP/port and
+the Node socket peer in the owner-only ledger. Rejected/duplicate deliveries
+are logged as sanitized outcomes with source details in the bounded container
+logs, not saved as separate receipts. Nginx overwrites `X-Renobot-Client-IP`
+and `X-Renobot-Client-Port` with its observed `$remote_addr`/`$remote_port` on
+the Ko-fi route. Docker port publishing can make Node see the Docker gateway
+instead of Nginx: set `KOFI_TRUSTED_PROXY_IP` privately to the **exact**
+observed socket peer address of the host Nginx after verifying it cannot be
+reached from untrusted containers or other local processes. Otherwise leave it
+unset: the ledger identifies the socket peer, not the original Internet IP.
+Do not trust arbitrary `X-Forwarded-For`, and do not configure an untrusted
+upstream/CDN as Nginx real_ip; with another upstream, Nginx's observation is
+that upstream unless its real-IP trust settings are configured separately.
+IP/port and reverse DNS are investigative clues, **not proof of Ko-fi origin**;
+anyone with a creator's verification token can still forge qualifying
+deliveries. The source port is ephemeral and may represent a NAT/proxy port.
+These addresses are personal data: restrict owner and log access, establish a
+retention/erasure policy and protect off-host backups before use.
+
+The production workflow does **not** install or reload `deploy/nginx.conf`.
+Before deploying an image that uses Nginx-observed client addresses, have a
+server operator compare the live site with the checked-in configuration,
+install the dedicated Ko-fi location without disrupting Certbot's HTTPS
+server, run `nginx -t`, and reload Nginx explicitly. This repository cannot
+verify the host's live config from CI. Until then, leave
+`KOFI_TRUSTED_PROXY_IP` unset and treat recorded addresses as socket peers.
+Do not enable role processing merely because the image is deployed. The
+SQLite file still lacks encrypted off-host backups and a tested restore;
+review that risk before taking real creator payments.
 
 ### Owner-controlled Ko-fi test deployment
 

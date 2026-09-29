@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
+import { isIP } from 'node:net';
 
-import { appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
+import { adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
 import { requiredCapability, resolveCapabilities } from './web-capabilities.js';
 import { MissingVerificationTokenError } from './database.js';
 import { maxKofiBodyBytes, receiveKofiReceipt } from './kofi-ingestion.js';
@@ -10,18 +11,40 @@ import { createOAuthState, createSession, csrfToken, oauthReturnTo, readCookie, 
 const stateCookie = 'renobot_oauth_state';
 const sessionCookie = 'renobot_session';
 
+/** @param {import('node:http').IncomingMessage} incoming @param {string | undefined} trustedProxyIp */
+function deliverySource(incoming, trustedProxyIp) {
+  const peerIp = incoming.socket.remoteAddress ?? null;
+  const peerPort = incoming.socket.remotePort ?? null;
+  const ip = incoming.headers['x-renobot-client-ip'];
+  const port = incoming.headers['x-renobot-client-port'];
+  if (trustedProxyIp && peerIp === trustedProxyIp && typeof ip === 'string' && isIP(ip)
+    && typeof port === 'string' && /^\d{1,5}$/u.test(port) && Number(port) > 0 && Number(port) <= 65535) {
+    return { ip, port: Number(port), viaProxy: true, peerIp, peerPort };
+  }
+  return { ip: peerIp, port: peerPort, viaProxy: false, peerIp, peerPort };
+}
+
 /**
  * @param {Readonly<{
  *   bot: import('discord.js').Client,
  *   config: import('./web-config.js').WebConfig | undefined,
  *   database?: import('./database.js').PortalDatabase,
  *   settingsConfig?: import('./modder-settings.js').ModderSettingsConfig,
+ *   supporterRoleId?: string,
+ *   trustedKofiProxyIp?: string,
  *   logger: import('pino').Logger,
  *   request?: typeof fetch,
  * }>} options
  */
 export function createWebServer(options) {
   const request = options.request ?? fetch;
+  /** @type {{ at: string, event: 'accepted' | 'duplicate' | 'rejected' | 'storage-failure' }[]} */
+  const recentWebhookEvents = [];
+  /** @param {'accepted' | 'duplicate' | 'rejected' | 'storage-failure'} event */
+  function noteWebhook(event) {
+    recentWebhookEvents.unshift({ at: new Date().toISOString(), event });
+    if (recentWebhookEvents.length > 100) recentWebhookEvents.length = 100;
+  }
   /** @type {Map<string, Set<{ userId: string, token: string, response: import('node:http').ServerResponse }>>} */
   const subscribersByIntegration = new Map();
   /** @param {string} integrationId */
@@ -77,10 +100,21 @@ export function createWebServer(options) {
           return;
         }
         const rawBody = await readBody(incoming, maxKofiBodyBytes);
-        const result = await receiveKofiReceipt(options.database, options.settingsConfig.key,
-          receiptEndpoint[1] ?? '', rawBody, publishReceipt);
+        const source = deliverySource(incoming, options.trustedKofiProxyIp);
+        let result;
+        try {
+          result = await receiveKofiReceipt(options.database, options.settingsConfig.key,
+            receiptEndpoint[1] ?? '', rawBody, publishReceipt,
+            options.supporterRoleId ? options.settingsConfig.minimumAmount : undefined, source);
+        } catch (error) {
+          noteWebhook('storage-failure');
+          options.logger.warn({ source }, 'Ko-fi webhook storage failure');
+          throw error;
+        }
+        noteWebhook(result);
+        options.logger.info({ source, result }, 'Ko-fi webhook delivery');
         sendText(response, result === 'rejected' ? 403 : 200,
-          result === 'rejected' ? 'Delivery not verified' : 'Receipt recorded; no supporter role changed');
+          result === 'rejected' ? 'Delivery not verified' : 'Receipt recorded');
         return;
       }
       if (incoming.method === 'GET' && url.pathname === '/assets/site.css') {
@@ -104,6 +138,36 @@ export function createWebServer(options) {
         }
         sendJson(response, 200, { username: session.username, ready: options.bot.isReady(),
           owner: session.id === options.config.ownerUserId, csrf: csrfToken(token ?? '', options.config.sessionSecret) });
+        return;
+      }
+      if (incoming.method === 'GET' && (url.pathname === '/app/api/admin/kofi/entries'
+        || url.pathname === '/app/api/admin/kofi/operations')) {
+        const session = readSession(readCookie(incoming.headers.cookie, sessionCookie), options.config.sessionSecret);
+        if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
+        if (session.id !== options.config.ownerUserId) { sendJson(response, 403, { error: 'Access denied' }); return; }
+        if (url.pathname === '/app/api/admin/kofi/operations') {
+          sendJson(response, 200, { events: recentWebhookEvents });
+          return;
+        }
+        if (!options.database || !options.settingsConfig) {
+          sendJson(response, 503, { error: 'Ledger is unavailable' });
+          return;
+        }
+        const before = url.searchParams.get('before') ?? undefined;
+        if ((before && !/^[A-Za-z0-9_-]{1,64}$/u.test(before)) || url.searchParams.has('before') && !before) {
+          sendJson(response, 400, { error: 'Invalid entry cursor' });
+          return;
+        }
+        const { entries, nextCursor } = await options.database.listAdminKofiEntries(before);
+        sendJson(response, 200, { entries: entries.map((entry) => ({
+          id: entry.id, ownerDiscordUserId: entry.integration.account.discordUserId,
+          ownerUsername: entry.integration.account.lastKnownUsername,
+          transactionId: entry.transactionId, eventType: entry.eventType,
+          amount: entry.amount.toFixed(2), currency: entry.currency,
+          receivedAt: entry.receivedAt.toISOString(), outcome: entry.outcome,
+          sourceIp: entry.sourceIp, sourcePort: entry.sourcePort,
+          sourceViaProxy: entry.sourceViaProxy, peerIp: entry.peerIp, peerPort: entry.peerPort,
+        })), nextCursor });
         return;
       }
       if ((url.pathname === '/app/api/modder/kofi' && (incoming.method === 'GET' || incoming.method === 'POST'))
@@ -211,7 +275,7 @@ export function createWebServer(options) {
             ?? options.settingsConfig.minimumAmount, currency: options.settingsConfig.currency,
           floor: options.settingsConfig.minimumAmount,
           hasVerificationToken: Boolean(integration?.verificationTokenCiphertext),
-          hasForwardUrl: Boolean(integration?.forwardUrlCiphertext), active: false,
+          hasForwardUrl: Boolean(integration?.forwardUrlCiphertext), active: Boolean(options.supporterRoleId),
           prodUrl: integration ? new URL(`/prod/kofi/${integration.endpointId}`, options.config.publicBaseUrl).href : null,
           lastWebhookAt: integration?.lastWebhookAt?.toISOString() ?? null });
         } catch {
@@ -250,6 +314,10 @@ export function createWebServer(options) {
       if (incoming.method === 'GET' && (url.pathname === '/app' || url.pathname.startsWith('/app/'))) {
         if (url.pathname === '/app/modder/kofi') {
           sendHtml(response, modderKofiPage);
+          return;
+        }
+        if (url.pathname === '/app/admin/kofi') {
+          sendHtml(response, adminKofiPage);
           return;
         }
         if (url.pathname !== '/app') {

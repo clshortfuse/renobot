@@ -18,6 +18,11 @@ describe('public static deployment', () => {
     assert.doesNotMatch(nginx, /location \/assets\/ \{|location = \/auth\/session \{[^}]*try_files/u);
   });
 
+  it('overwrites webhook client source at Nginx rather than forwarding user-supplied provenance', () => {
+    assert.match(nginx, /location \^~ \/prod\/kofi\/ \{[\s\S]*?proxy_set_header X-Renobot-Client-IP \$remote_addr;[\s\S]*?proxy_set_header X-Renobot-Client-Port \$remote_port;/u);
+    assert.match(compose, /127\.0\.0\.1:3000:3000/u);
+  });
+
   it('extracts public files from the selected image before switching the public symlink', () => {
     assert.match(deploy, /docker cp "\$container:\/app\/src\/static\/\." "\$staging\/"/u);
     assert.match(deploy, /docker compose [^\n]*up -d --no-deps --wait app[\s\S]*mv -Tf \/opt\/renobot\/public\.next \/opt\/renobot\/public/u);
