@@ -34,7 +34,7 @@ afterEach(async () => {
  * @param {Readonly<{ ready?: boolean, request?: typeof fetch, bot?: import('discord.js').Client,
  *   config?: import('../src/web-config.js').WebConfig, database?: import('../src/database.js').PortalDatabase,
  *   settingsConfig?: import('../src/modder-settings.js').ModderSettingsConfig,
- *   trustedKofiProxyIp?: string, supporterRoleId?: string }>} [options]
+ *   trustedKofiProxyIp?: string, supporterRoleId?: string, earlyAccessRoleId?: string }>} [options]
  */
 async function startServer(options = {}) {
   const logger = { error() {}, warn() {}, info() {} };
@@ -47,6 +47,7 @@ async function startServer(options = {}) {
     ...(options.settingsConfig ? { settingsConfig: options.settingsConfig } : {}),
     ...(options.trustedKofiProxyIp ? { trustedKofiProxyIp: options.trustedKofiProxyIp } : {}),
     ...(options.supporterRoleId ? { supporterRoleId: options.supporterRoleId } : {}),
+    ...(options.earlyAccessRoleId ? { earlyAccessRoleId: options.earlyAccessRoleId } : {}),
   });
   servers.push(server);
   await new Promise((resolve, reject) => {
@@ -70,6 +71,75 @@ async function beginLogin(baseUrl, returnTo) {
 }
 
 describe('dashboard routes', () => {
+  it('shows only the owner early-access totals, periods and credited modders', async () => {
+    const calls = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      listEarlyAccessReview: async (/** @type {string} */ roleId, /** @type {string | undefined} */ before) => {
+        calls.push(['list', roleId, before]);
+        return { members: [{ discordUserId: '12345678901234567', totalAmount: { toFixed: () => '13.00' },
+          creditedMonths: 2, expiresAt: new Date('2099-10-29T00:00:00Z'), roleManaged: true, sync: null }], nextCursor: null };
+      },
+      getEarlyAccessReview: async (/** @type {string} */ id) => {
+        calls.push(['detail', id]);
+        return id === '12345678901234567' ? { periods: [{ startedAt: new Date('2026-09-01T00:00:00Z'),
+          expiresAt: new Date('2026-11-01T00:00:00Z'), months: 2 }], contributions: [{ eventId: 'receipt',
+          amount: { toFixed: () => '13.00' }, currency: 'USD', eventType: 'Donation',
+          receivedAt: new Date('2026-09-01T00:00:00Z'), modderDiscordUserId: '23456789012345678',
+          modderUsername: '<script>' }], nextCursor: null } : null;
+      },
+    }));
+    const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({
+      isReady: () => true, users: { fetch: async () => ({ globalName: 'Preview supporter' }) },
+    }));
+    const base = await startServer({ bot, database, earlyAccessRoleId: '1554515217751216185',
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const path = '/app/api/admin/early-access';
+    const owner = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
+    const other = { Cookie: `renobot_session=${createSession({ id: 'member', username: 'member' }, secret)}` };
+    assert.equal((await fetch(`${base}${path}`)).status, 401);
+    assert.equal((await fetch(`${base}${path}`, { headers: other })).status, 403);
+    assert.equal((await fetch(`${base}${path}/12345678901234567`, { headers: other })).status, 403);
+    assert.equal((await fetch(`${base}${path}?before=bad`, { headers: owner })).status, 400);
+    const list = await (await fetch(`${base}${path}`, { headers: owner })).json();
+    assert.equal(list.members[0].discordName, 'Preview supporter');
+    assert.equal(list.members[0].totalAmount, '13.00');
+    assert.equal(list.members[0].creditedMonths, 2);
+    assert.equal(list.members[0].roleManaged, true);
+    const detail = await (await fetch(`${base}${path}/12345678901234567`, { headers: owner })).json();
+    assert.equal(detail.periods[0].months, 2);
+    assert.equal(detail.contributions[0].modderUsername, '<script>');
+    assert.equal((await fetch(`${base}${path}/34567890123456789`, { headers: owner })).status, 404);
+    assert.equal((await fetch(`${base}${path}/bad`, { headers: owner })).status, 400);
+    assert.equal(calls.length, 3);
+    assert.match(await (await fetch(`${base}/app/admin/early-access`)).text(), /Early-access review/u);
+  });
+  it('only allows the owner to approve one active historical Early Access recipient with CSRF', async () => {
+    /** @type {string[]} */
+    const approved = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      approveEarlyAccess: async (/** @type {string} */ id) => {
+        approved.push(id);
+        return id === '12345678901234567';
+      },
+    }));
+    const base = await startServer({ database, earlyAccessRoleId: '1554515217751216185' });
+    const url = `${base}/app/api/admin/early-access/12345678901234567/approve`;
+    const token = createSession({ id: 'owner', username: 'owner' }, secret);
+    const other = createSession({ id: 'member', username: 'member' }, secret);
+    const post = (/** @type {string | undefined} */ cookie, /** @type {string} */ csrf, /** @type {string} */ path = url) =>
+      fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded',
+        ...(cookie ? { Cookie: `renobot_session=${cookie}` } : {}) }, body: new URLSearchParams({ csrf }) });
+    assert.equal((await fetch(url)).status, 401);
+    assert.equal((await post(undefined, '')).status, 401);
+    assert.equal((await post(other, csrfToken(other, secret))).status, 403);
+    assert.equal((await post(token, 'invalid')).status, 403);
+    assert.equal((await post(token, csrfToken(token, secret), `${base}/app/api/admin/early-access/bad/approve`)).status, 400);
+    assert.deepEqual(approved, []);
+    assert.deepEqual(await (await post(token, csrfToken(token, secret))).json(), { scheduled: true });
+    assert.equal((await post(token, csrfToken(token, secret),
+      `${base}/app/api/admin/early-access/23456789012345678/approve`)).status, 409);
+    assert.deepEqual(approved, ['12345678901234567', '23456789012345678']);
+  });
   it('reports Discord readiness without exposing a cacheable response', async () => {
     const baseUrl = await startServer({ ready: false });
     const response = await fetch(`${baseUrl}/health`);
@@ -176,11 +246,19 @@ describe('dashboard routes', () => {
     integration.verificationTokenCiphertext = encryptSetting('secret', key,
       integrationSecretOwner(integration), 'verification-token');
     let receipts = 0;
+    /** @type {boolean | undefined} */
+    let earlyAccessEnabled;
     const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
       findIntegrationByEndpoint: async (/** @type {string} */ id) => id === endpointId ? integration : null,
-      recordKofiReceipt: async () => { receipts++; return 'accepted'; },
+      recordKofiReceipt: async (/** @type {string} */ _id, /** @type {string} */ _token,
+        /** @type {unknown} */ _payment, /** @type {string | undefined} */ _floor,
+        /** @type {unknown} */ _source, /** @type {boolean | undefined} */ enabled) => {
+        earlyAccessEnabled = enabled;
+        receipts++;
+        return 'accepted';
+      },
     }));
-    const baseUrl = await startServer({ database,
+    const baseUrl = await startServer({ database, earlyAccessRoleId: '1554515217751216185',
       settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
     const url = `${baseUrl}/prod/kofi/${endpointId}`;
     const body = (/** @type {string} */ token) => new URLSearchParams({ data: JSON.stringify({
@@ -201,6 +279,7 @@ describe('dashboard routes', () => {
     assert.equal(await verified.text(), 'Receipt recorded');
     assert.equal(verified.headers.get('cache-control'), 'no-store');
     assert.equal(receipts, 1);
+    assert.equal(earlyAccessEnabled, true);
   });
 
   it('ignores spoofed forwarding headers unless the exact socket peer is configured as trusted', async () => {

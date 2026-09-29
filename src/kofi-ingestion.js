@@ -100,14 +100,16 @@ export async function ingestKofiPayment(database, key, endpointId, rawBody) {
  * @param {(integrationId: string) => void} [onRecorded]
  * @param {string} [membershipFloor]
  * @param {KofiDeliverySource} [source]
+ * @param {boolean} [earlyAccessEnabled]
  * @returns {Promise<'rejected' | 'accepted' | 'duplicate'>}
  */
-export async function receiveKofiReceipt(database, key, endpointId, rawBody, onRecorded, membershipFloor, source) {
+export async function receiveKofiReceipt(database, key, endpointId, rawBody, onRecorded, membershipFloor, source, earlyAccessEnabled) {
   const payment = parseKofiPayment(rawBody);
   if (!payment) return 'rejected';
   const integration = await database.findIntegrationByEndpoint(endpointId);
   if (!integration || !verifiedToken(integration, key, payment)) return 'rejected';
-  const result = await database.recordKofiReceipt(integration.id, integration.verificationTokenCiphertext, payment, membershipFloor, source);
+  const result = await database.recordKofiReceipt(integration.id, integration.verificationTokenCiphertext,
+    payment, membershipFloor, source, earlyAccessEnabled);
   if (result === 'accepted') {
     try { onRecorded?.(integration.id); } catch { /* A live notice cannot undo an accepted receipt. */ }
   }

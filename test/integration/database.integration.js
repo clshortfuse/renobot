@@ -5,9 +5,10 @@ import { after, before, describe, it } from 'node:test';
 import { PrismaClient } from '@prisma/client';
 
 import { connectPortalDatabase, createPortalDatabase, MissingVerificationTokenError } from '../../src/database.js';
+import { testSupporterDiscordUserId } from '../../src/early-access.js';
 import { ingestKofiPayment, receiveKofiReceipt } from '../../src/kofi-ingestion.js';
 import { decryptSetting, encryptSetting, integrationSecretOwner } from '../../src/modder-settings.js';
-import { reconcileSupporterRole } from '../../src/supporter-roles.js';
+import { reconcileEarlyAccessRole, reconcileSupporterRole } from '../../src/supporter-roles.js';
 import { membership } from '../fixtures/kofi-membership.js';
 
 const url = process.env.DATABASE_URL;
@@ -23,6 +24,166 @@ after(async () => { await client.$disconnect(); });
 function discordId() { return `10${randomInt(10000000, 100000000)}${randomInt(10000000, 100000000)}`; }
 
 describe('SQLite migrations and repositories', () => {
+  it('never grants Early Access to the hardcoded test Discord ID', async () => {
+    const database = createPortalDatabase(client);
+    const owner = { id: discordId(), username: 'test-modder' };
+    const key = Buffer.alloc(32, 7);
+    const integration = await database.saveIntegration(owner, { minimumAmount: '5.00', currency: 'USD',
+      verificationToken: 'secret', forwardUrlAction: 'keep', forwardUrl: '' }, key);
+    try {
+      assert.equal(await receiveKofiReceipt(database, key, integration.endpointId,
+        new URLSearchParams({ data: JSON.stringify({ ...membership, verification_token: 'secret',
+          message_id: randomUUID(), amount: '50.00', discord_userid: testSupporterDiscordUserId,
+        }) }).toString(), undefined, undefined, undefined, true), 'accepted');
+      assert.equal(await client.kofiEvent.count({ where: { integrationId: integration.id } }), 1);
+      await database.backfillEarlyAccess('USD');
+      assert.equal(await database.earlyAccessExpiry(testSupporterDiscordUserId), null);
+      assert.equal(await database.getEarlyAccessReview(testSupporterDiscordUserId), null);
+      assert.equal((await database.listEarlyAccessReview('early-role')).members.some(
+        (person) => person.discordUserId === testSupporterDiscordUserId), false);
+      assert.equal(await database.approveEarlyAccess(testSupporterDiscordUserId, new Date()), false);
+      assert.equal(await client.earlyAccessCredit.count({ where: { discordUserId: testSupporterDiscordUserId } }), 0);
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: testSupporterDiscordUserId } }), 0);
+      await client.earlyAccessRoleSync.create({ data: { discordUserId: testSupporterDiscordUserId, nextAttemptAt: new Date(0) } });
+      const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({ guilds: {
+        fetch: () => { throw new Error('Test ID must not reach Discord'); },
+      } }));
+      assert.equal(await reconcileEarlyAccessRole(database, bot, 'guild', 'early-role', new Date()), true);
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: testSupporterDiscordUserId } }), 0);
+    } finally {
+      await client.earlyAccessRoleSync.deleteMany({ where: { discordUserId: testSupporterDiscordUserId } });
+      await client.kofiEvent.deleteMany({ where: { integrationId: integration.id } });
+      await client.kofiIntegration.delete({ where: { id: integration.id } });
+      await client.account.delete({ where: { discordUserId: owner.id } });
+    }
+  });
+  it('credits global early-access months across modders and restarts after a lapse', async () => {
+    const database = createPortalDatabase(client);
+    const key = Buffer.alloc(32, 7);
+    const supporter = discordId();
+    const owners = [{ id: discordId(), username: 'alpha' }, { id: discordId(), username: 'beta' }];
+    /** @type {import('@prisma/client').KofiIntegration[]} */
+    const integrations = [];
+    try {
+      for (const owner of owners) integrations.push(await database.saveIntegration(owner, {
+        minimumAmount: '5.00', currency: 'USD', verificationToken: 'secret',
+        forwardUrlAction: 'keep', forwardUrl: '',
+      }, key));
+      const send = (/** @type {number} */ index, /** @type {string} */ id, /** @type {string} */ amount,
+        /** @type {string | null} */ user = supporter, /** @type {string} */ currency = 'USD',
+        /** @type {string} */ type = 'Donation') =>
+        receiveKofiReceipt(database, key, integrations[index]?.endpointId ?? '',
+          new URLSearchParams({ data: JSON.stringify({ ...membership, verification_token: 'secret',
+            message_id: id, discord_userid: user, amount, currency, type, is_subscription_payment: false,
+          }) }).toString(), undefined, undefined, undefined, true);
+      assert.equal(await send(0, 'unlinked', '20.00', null), 'accepted');
+      assert.equal(await send(0, 'different-currency', '20.00', supporter, 'EUR'), 'accepted');
+      assert.equal(await send(0, 'shop-order', '20.00', supporter, 'USD', 'Shop Order'), 'accepted');
+      assert.equal(await send(0, 'thirteen', '13.00'), 'accepted');
+      assert.equal(await send(0, 'thirteen', '13.00'), 'duplicate');
+      let balance = await client.earlyAccessBalance.findUniqueOrThrow({ where: { discordUserId: supporter } });
+      assert.equal(balance.totalAmount.toFixed(2), '13.00');
+      assert.equal(balance.creditedMonths, 2);
+      const first = await client.earlyAccessPeriod.findFirstOrThrow({ where: { discordUserId: supporter } });
+      assert.equal(first.months, 2);
+      await client.earlyAccessBalance.update({ where: { discordUserId: supporter },
+        data: { expiresAt: new Date(0) } });
+      assert.equal(await send(1, 'six', '6.00'), 'accepted');
+      balance = await client.earlyAccessBalance.findUniqueOrThrow({ where: { discordUserId: supporter } });
+      assert.equal(balance.totalAmount.toFixed(2), '19.00');
+      assert.equal(balance.creditedMonths, 3);
+      assert.equal((await client.earlyAccessPeriod.findMany({ where: { discordUserId: supporter } })).length, 2);
+      assert.equal(await send(1, 'one', '1.00'), 'accepted');
+      assert.equal((await client.earlyAccessBalance.findUniqueOrThrow({ where: { discordUserId: supporter } })).creditedMonths, 4);
+      assert.equal((await client.earlyAccessPeriod.findMany({ where: { discordUserId: supporter } })).length, 2);
+      const review = await database.listEarlyAccessReview('early-role');
+      const reviewed = review.members.find((member) => member.discordUserId === supporter);
+      assert.equal(reviewed?.creditedMonths, 4);
+      assert.equal(reviewed?.totalAmount.toFixed(2), '20.00');
+      const provenance = await database.getEarlyAccessReview(supporter);
+      assert.equal(provenance?.periods.length, 2);
+      assert.equal(provenance?.contributions.length, 3);
+      assert.deepEqual(new Set(provenance?.contributions.map((item) => item.modderDiscordUserId)),
+        new Set(owners.map((owner) => owner.id)));
+      assert.equal(await database.getEarlyAccessReview(discordId()), null);
+      let hasRole = false;
+      let grants = 0;
+      let removals = 0;
+      const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({ guilds: {
+        fetch: async () => ({ roles: { fetch: async () => ({ editable: true }) }, members: { fetch: async () => ({ roles: {
+          cache: { has: () => hasRole }, add: async () => { hasRole = true; grants++; },
+          remove: async () => { hasRole = false; removals++; },
+        } }) } }),
+      } }));
+      assert.equal(await reconcileEarlyAccessRole(database, bot, 'guild', 'early-role', new Date()), true);
+      assert.equal(grants, 1);
+      assert.equal(await database.hasManagedSupporterRole(supporter, 'early-role'), true);
+      assert.equal(await database.hasManagedSupporterRole(supporter, 'supporter-role'), false);
+      await client.earlyAccessBalance.update({ where: { discordUserId: supporter }, data: { expiresAt: new Date(0) } });
+      await client.earlyAccessRoleSync.update({ where: { discordUserId: supporter }, data: { nextAttemptAt: new Date(0) } });
+      assert.equal(await reconcileEarlyAccessRole(database, bot, 'guild', 'early-role', new Date()), true);
+      assert.equal(removals, 1);
+      assert.equal(await database.hasManagedSupporterRole(supporter, 'early-role'), false);
+    } finally {
+      await client.earlyAccessRoleSync.deleteMany({ where: { discordUserId: supporter } });
+      await client.managedSupporterRole.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessPeriod.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessBalance.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessCredit.deleteMany({ where: { eventId: { in: (await client.kofiEvent.findMany({
+        where: { integrationId: { in: integrations.map((i) => i.id) } }, select: { id: true },
+      })).map((event) => event.id) } } });
+      await client.kofiEvent.deleteMany({ where: { integrationId: { in: integrations.map((i) => i.id) } } });
+      await client.kofiIntegration.deleteMany({ where: { id: { in: integrations.map((i) => i.id) } } });
+      await client.account.deleteMany({ where: { discordUserId: { in: owners.map((owner) => owner.id) } } });
+    }
+  });
+  it('replays existing verified receipts once on activation', async () => {
+    const database = createPortalDatabase(client);
+    const key = Buffer.alloc(32, 7);
+    const owner = { id: discordId(), username: 'modder' };
+    const supporter = discordId();
+    const integration = await database.saveIntegration(owner, { minimumAmount: '5.00', currency: 'USD',
+      verificationToken: 'secret', forwardUrlAction: 'keep', forwardUrl: '' }, key);
+    try {
+      for (const [id, amount] of [['three', '3.00'], ['two', '2.00']]) {
+        assert.equal(await receiveKofiReceipt(database, key, integration.endpointId,
+          new URLSearchParams({ data: JSON.stringify({ ...membership, verification_token: 'secret',
+            message_id: id, discord_userid: supporter, amount, is_subscription_payment: false,
+          }) }).toString()), 'accepted');
+      }
+      assert.equal(await database.earlyAccessExpiry(supporter), null);
+      await database.backfillEarlyAccess('USD');
+      const balance = await client.earlyAccessBalance.findUniqueOrThrow({ where: { discordUserId: supporter } });
+      assert.equal(balance.totalAmount.toFixed(2), '5.00');
+      assert.equal(balance.creditedMonths, 1);
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter } }), 0);
+      assert.equal(await database.dueEarlyAccessSync(new Date()), null);
+      assert.equal(await client.earlyAccessCredit.count({ where: { eventId: { in: (await client.kofiEvent.findMany({
+        where: { integrationId: integration.id }, select: { id: true },
+      })).map((event) => event.id) } } }), 2);
+      await database.backfillEarlyAccess('USD');
+      assert.equal((await client.earlyAccessBalance.findUniqueOrThrow({ where: { discordUserId: supporter } })).totalAmount.toFixed(2), '5.00');
+      assert.equal((await client.earlyAccessPeriod.findMany({ where: { discordUserId: supporter } })).length, 1);
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter } }), 0);
+      assert.equal(await database.approveEarlyAccess(supporter, new Date()), true);
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter } }), 1);
+      assert.equal(await database.approveEarlyAccess(supporter, new Date()), true);
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter } }), 1);
+      await client.earlyAccessBalance.update({ where: { discordUserId: supporter }, data: { expiresAt: new Date(0) } });
+      assert.equal(await database.approveEarlyAccess(supporter, new Date()), false);
+      assert.equal(await database.approveEarlyAccess(discordId(), new Date()), false);
+    } finally {
+      await client.earlyAccessRoleSync.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessPeriod.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessBalance.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessCredit.deleteMany({ where: { eventId: { in: (await client.kofiEvent.findMany({
+        where: { integrationId: integration.id }, select: { id: true },
+      })).map((event) => event.id) } } });
+      await client.kofiEvent.deleteMany({ where: { integrationId: integration.id } });
+      await client.kofiIntegration.delete({ where: { id: integration.id } });
+      await client.account.delete({ where: { discordUserId: owner.id } });
+    }
+  });
   it('renews 35-day leases per modder without shortening them or creating work for ineligible receipts', async () => {
     const database = createPortalDatabase(client);
     const key = Buffer.alloc(32, 7);
@@ -346,7 +507,7 @@ describe('SQLite migrations and repositories', () => {
     const rows = await client.$queryRaw`SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
     assert.deepEqual(new Set(/** @type {{migration_name: string}[]} */ (rows).map((row) => row.migration_name)),
       new Set(['20260928000000_sqlite_portal', '20260929000000_managed_supporter_role',
-        '20260929010000_kofi_delivery_source']));
+        '20260929010000_kofi_delivery_source', '20260929020000_early_access_periods']));
     const id = discordId();
     const database = await connectPortalDatabase(url);
     assert.ok(database);

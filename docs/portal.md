@@ -1,3 +1,40 @@
+# Early-access donation role
+
+The owner-only page `/app/admin/early-access` lists credited supporters with
+current expiry, cumulative donated amount, months earned and Renobot's recorded
+role-sync state. Review payments for each person to see the dated access periods
+and the amount, date and recipient modder of each credited donation. The records
+are from the ledger, not a live Discord role check. Access to both the list and
+individual histories requires a current owner session.
+
+Set `DISCORD_EARLY_ACCESS_ROLE_ID=1554515217751216185` in the private host
+environment to enable the independent early-access role. It does not grant
+Supporter or Clubroom permissions; configure its channel permissions in
+Discord. This setting is separate from `DISCORD_SUPPORTER_ROLE_ID` and requires
+the same Ko-fi ledger and configured currency.
+
+Verified Ko-fi Donation and Subscription receipts from any modder integration
+with a linked Discord ID add to a shared balance in the configured currency.
+Each complete $5 earns one calendar month of early access, with leftover funds
+carried forward even if access lapses. New months extend active access or start
+on the next payment after expiry. Historical verified receipts are replayed in
+receipt order when the role is enabled; each receipt is credited only once
+across restarts. Replay populates the review ledger but does not queue role
+grants. The owner reviews each person's payments and individually approves a
+currently active period to queue role sync. Expired periods cannot be approved;
+new verified payments continue to queue role sync automatically. The known
+test Discord ID `012345678901234567` is hardcoded as ineligible: its
+receipts remain visible in the payment ledger but never count toward Early
+Access, appear in this review, or queue a role grant. Other test payments with
+a different linked Discord ID cannot be reliably distinguished from real
+payments and would count under the current rules.
+
+Renobot only removes early-access roles it granted itself; manually assigned
+roles are left alone. Before enabling, verify that the role exists, that the bot
+can manage it, and that the saved Ko-fi tokens and encryption key have not been
+changed. The role is opt-in; setting the role ID on the host is a separate
+deployment action.
+
 # Modder memberships
 
 The modder portal at `/app/modder/kofi` now leads with a paginated list of the

@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import { DiscordAPIError } from 'discord.js';
 
-import { adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
+import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteCss, siteJs } from './web-assets.js';
 import { requiredCapability, resolveCapabilities } from './web-capabilities.js';
 import { MissingVerificationTokenError } from './database.js';
 import { maxKofiBodyBytes, receiveKofiReceipt } from './kofi-ingestion.js';
@@ -32,6 +32,7 @@ function deliverySource(incoming, trustedProxyIp) {
  *   database?: import('./database.js').PortalDatabase,
  *   settingsConfig?: import('./modder-settings.js').ModderSettingsConfig,
  *   supporterRoleId?: string,
+ *   earlyAccessRoleId?: string,
  *   trustedKofiProxyIp?: string,
  *   logger: import('pino').Logger,
  *   request?: typeof fetch,
@@ -106,7 +107,8 @@ export function createWebServer(options) {
         try {
           result = await receiveKofiReceipt(options.database, options.settingsConfig.key,
             receiptEndpoint[1] ?? '', rawBody, publishReceipt,
-            options.supporterRoleId ? options.settingsConfig.minimumAmount : undefined, source);
+            options.supporterRoleId ? options.settingsConfig.minimumAmount : undefined, source,
+            Boolean(options.earlyAccessRoleId));
         } catch (error) {
           noteWebhook('storage-failure');
           options.logger.warn({ source }, 'Ko-fi webhook storage failure');
@@ -141,7 +143,32 @@ export function createWebServer(options) {
           owner: session.id === options.config.ownerUserId, csrf: csrfToken(token ?? '', options.config.sessionSecret) });
         return;
       }
-      if (incoming.method === 'GET' && (url.pathname === '/app/api/admin/kofi/entries'
+      if (incoming.method === 'POST' && /^\/app\/api\/admin\/early-access\/[^/]+\/approve$/u.test(url.pathname)) {
+        const token = readCookie(incoming.headers.cookie, sessionCookie);
+        const session = readSession(token, options.config.sessionSecret);
+        if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
+        if (session.id !== options.config.ownerUserId) { sendJson(response, 403, { error: 'Access denied' }); return; }
+        if (!options.database || !options.earlyAccessRoleId) {
+          sendJson(response, 503, { error: 'Early-access role is unavailable' }); return;
+        }
+        const supporterId = url.pathname.slice('/app/api/admin/early-access/'.length, -'/approve'.length);
+        if (!/^\d{17,20}$/u.test(supporterId)) { sendJson(response, 400, { error: 'Invalid supporter ID' }); return; }
+        if (!incoming.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) {
+          sendJson(response, 415, { error: 'Unsupported content type' }); return;
+        }
+        const body = await readForm(incoming, 4096);
+        if (!verifyCsrfToken(body.get('csrf') ?? '', token ?? '', options.config.sessionSecret)) {
+          sendJson(response, 403, { error: 'Invalid CSRF token' }); return;
+        }
+        if (!await options.database.approveEarlyAccess(supporterId, new Date())) {
+          sendJson(response, 409, { error: 'No active early-access period to approve' }); return;
+        }
+        sendJson(response, 200, { scheduled: true });
+        return;
+      }
+      if (incoming.method === 'GET' && (url.pathname === '/app/api/admin/early-access'
+        || url.pathname.startsWith('/app/api/admin/early-access/')
+        || url.pathname === '/app/api/admin/kofi/entries'
         || url.pathname === '/app/api/admin/kofi/operations')) {
         const session = readSession(readCookie(incoming.headers.cookie, sessionCookie), options.config.sessionSecret);
         if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
@@ -152,6 +179,52 @@ export function createWebServer(options) {
         }
         if (!options.database || !options.settingsConfig) {
           sendJson(response, 503, { error: 'Ledger is unavailable' });
+          return;
+        }
+        if (url.pathname === '/app/api/admin/early-access'
+          || url.pathname.startsWith('/app/api/admin/early-access/')) {
+          const before = url.searchParams.get('before') ?? undefined;
+          if (url.pathname === '/app/api/admin/early-access') {
+            if ((before && !/^\d{17,20}$/u.test(before)) || url.searchParams.has('before') && !before) {
+              sendJson(response, 400, { error: 'Invalid cursor' }); return;
+            }
+            const result = await options.database.listEarlyAccessReview(options.earlyAccessRoleId, before);
+            /** @type {(string | null)[]} */
+            const names = [];
+            for (let index = 0; index < result.members.length; index += 5) {
+              names.push(...await Promise.all(result.members.slice(index, index + 5).map(async (member) => {
+                try {
+                  const user = await options.bot.users.fetch(member.discordUserId);
+                  return user.globalName ?? user.username;
+                } catch { return null; }
+              })));
+            }
+            const now = Date.now();
+            sendJson(response, 200, { enabled: Boolean(options.earlyAccessRoleId),
+              members: result.members.map((member, index) => ({ discordUserId: member.discordUserId,
+                discordName: names[index] ?? null,
+                totalAmount: member.totalAmount.toFixed(2), currency: options.settingsConfig?.currency,
+                creditedMonths: member.creditedMonths, expiresAt: member.expiresAt?.toISOString() ?? null,
+                active: Boolean(member.expiresAt && member.expiresAt.getTime() > now),
+                roleManaged: member.roleManaged, syncStatus: member.sync?.lastErrorCode ? 'retrying'
+                  : member.sync ? 'scheduled' : 'idle', nextAttemptAt: member.sync?.nextAttemptAt.toISOString() ?? null })),
+              nextCursor: result.nextCursor });
+          } else {
+            const supporterId = url.pathname.slice('/app/api/admin/early-access/'.length);
+            if (!/^\d{17,20}$/u.test(supporterId)
+              || (before && !/^[A-Za-z0-9_-]{1,64}$/u.test(before)) || url.searchParams.has('before') && !before) {
+              sendJson(response, 400, { error: 'Invalid supporter ID or cursor' }); return;
+            }
+            const result = await options.database.getEarlyAccessReview(supporterId, before);
+            if (!result) { sendJson(response, 404, { error: 'No early-access record' }); return; }
+            sendJson(response, 200, { periods: result.periods.map((period) => ({
+              startedAt: period.startedAt.toISOString(), expiresAt: period.expiresAt.toISOString(), months: period.months,
+            })), contributions: result.contributions.map((entry) => ({
+              eventId: entry.eventId, amount: entry.amount.toFixed(2), currency: entry.currency,
+              eventType: entry.eventType, receivedAt: entry.receivedAt.toISOString(),
+              modderDiscordUserId: entry.modderDiscordUserId, modderUsername: entry.modderUsername,
+            })), nextCursor: result.nextCursor });
+          }
           return;
         }
         const before = url.searchParams.get('before') ?? undefined;
@@ -373,6 +446,10 @@ export function createWebServer(options) {
         }
         if (url.pathname === '/app/admin/kofi') {
           sendHtml(response, adminKofiPage);
+          return;
+        }
+        if (url.pathname === '/app/admin/early-access') {
+          sendHtml(response, adminEarlyAccessPage);
           return;
         }
         if (url.pathname !== '/app') {
