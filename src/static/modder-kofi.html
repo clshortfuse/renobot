@@ -13,7 +13,7 @@
     <nav aria-label="Portal navigation"><a href="/app">← Portal</a></nav>
     <p class="eyebrow">Modder settings</p>
     <h1>Ko-fi setup</h1>
-    <p>Save settings for your own integration. Verified Ko-fi deliveries, including Ko-fi test payments, are recorded as receipts. Supporter roles and forwarding are not active yet. Do not replace a working Ko-fi webhook until you are ready for this limitation.</p>
+    <p>Save settings for your own integration. Verified Ko-fi deliveries, including Ko-fi test payments, are recorded as receipts. Forwarding is not active. Do not replace a working Ko-fi webhook until you are ready for this limitation.</p>
     <p id="settings-status" role="status">Checking access…</p>
     <form id="kofi-form" hidden>
       <label for="minimum-amount">Minimum monthly amount</label>
@@ -39,12 +39,13 @@
     <section id="kofi-prod" hidden>
       <h2>Ko-fi webhook</h2>
       <p>Webhook URL: <span id="kofi-prod-url"></span></p>
-      <p>Enter this URL on Ko-fi's webhook page. Test payments and real payments use the same URL and appear as entries below. Verified deliveries are stored as minimal entries; no supporter role is granted or revoked and no data is forwarded.</p>
+      <p>Enter this URL on Ko-fi's webhook page. Test payments and real payments use the same URL and appear as entries below. No data is forwarded.</p>
+      <p id="kofi-role-status" role="status"></p>
       <p id="kofi-webhook-status" role="status">No verified deliveries yet.</p>
     </section>
     <section id="kofi-entries" hidden>
       <h2>Ko-fi entries</h2>
-      <p>Verified test and real payment receipts for your integration, newest first. Entries do not grant Support membership yet.</p>
+      <p>Verified test and real payment receipts for your integration, newest first. Only qualifying subscription payments create renewable membership when role sync is enabled.</p>
       <p id="kofi-entries-status" role="status">Loading entries…</p>
       <ul id="kofi-entries-list"></ul>
       <button id="kofi-entries-more" type="button" hidden>Load older entries</button>

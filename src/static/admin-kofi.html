@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Ko-fi activity · Renobot</title>
+  <link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/site.js" defer></script>
+</head>
+<body data-page="admin-kofi">
+  <main id="content">
+    <nav aria-label="Portal navigation"><a href="/app">← Portal</a></nav>
+    <p class="eyebrow">Owner dashboard</p>
+    <h1>Ko-fi activity</h1>
+    <p>Verified payment receipts are stored in SQLite. Operational events below are sanitized, kept only in memory, and lost when the bot restarts. This is not the container log.</p>
+    <p id="admin-kofi-status" role="status">Checking owner access…</p>
+    <section id="admin-kofi-content" hidden>
+      <h2>Payment receipts</h2>
+      <p id="admin-entries-status" role="status">Loading…</p>
+      <ul id="admin-entries-list"></ul>
+      <button id="admin-entries-more" type="button" hidden>Load older receipts</button>
+      <h2>Recent webhook events</h2>
+      <p id="admin-operations-status" role="status">Loading…</p>
+      <ul id="admin-operations-list"></ul>
+      <button id="admin-operations-refresh" type="button">Refresh events</button>
+    </section>
+  </main>
+</body>
+</html>

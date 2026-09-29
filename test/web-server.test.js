@@ -33,10 +33,11 @@ afterEach(async () => {
 /**
  * @param {Readonly<{ ready?: boolean, request?: typeof fetch, bot?: import('discord.js').Client,
  *   config?: import('../src/web-config.js').WebConfig, database?: import('../src/database.js').PortalDatabase,
- *   settingsConfig?: import('../src/modder-settings.js').ModderSettingsConfig }>} [options]
+ *   settingsConfig?: import('../src/modder-settings.js').ModderSettingsConfig,
+ *   trustedKofiProxyIp?: string }>} [options]
  */
 async function startServer(options = {}) {
-  const logger = { error() {}, warn() {} };
+  const logger = { error() {}, warn() {}, info() {} };
   const server = createWebServer({
     bot: options.bot ?? /** @type {import('discord.js').Client} */ ({ isReady: () => options.ready ?? true }),
     config: options.config ?? config,
@@ -44,6 +45,7 @@ async function startServer(options = {}) {
     ...(options.request ? { request: options.request } : {}),
     ...(options.database ? { database: options.database } : {}),
     ...(options.settingsConfig ? { settingsConfig: options.settingsConfig } : {}),
+    ...(options.trustedKofiProxyIp ? { trustedKofiProxyIp: options.trustedKofiProxyIp } : {}),
   });
   servers.push(server);
   await new Promise((resolve, reject) => {
@@ -195,9 +197,43 @@ describe('dashboard routes', () => {
     assert.equal(receipts, 0);
     const verified = await fetch(url, { method: 'POST', body: body('secret') });
     assert.equal(verified.status, 200);
-    assert.equal(await verified.text(), 'Receipt recorded; no supporter role changed');
+    assert.equal(await verified.text(), 'Receipt recorded');
     assert.equal(verified.headers.get('cache-control'), 'no-store');
     assert.equal(receipts, 1);
+  });
+
+  it('ignores spoofed forwarding headers unless the exact socket peer is configured as trusted', async () => {
+    const key = Buffer.alloc(32, 7);
+    const endpointId = 'p'.repeat(43);
+    const integration = { id: 'integration', accountId: 'account', endpointId, verificationTokenCiphertext: '' };
+    integration.verificationTokenCiphertext = encryptSetting('secret', key,
+      integrationSecretOwner(integration), 'verification-token');
+    /** @type {import('../src/kofi-ingestion.js').KofiDeliverySource[]} */
+    const sources = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      findIntegrationByEndpoint: async () => integration,
+      recordKofiReceipt: async (/** @type {string} */ _id, /** @type {string} */ _token,
+        /** @type {unknown} */ _payment, /** @type {string | undefined} */ _floor,
+        /** @type {import('../src/kofi-ingestion.js').KofiDeliverySource} */ source) => {
+        sources.push(source); return 'accepted';
+      },
+    }));
+    const body = new URLSearchParams({ data: JSON.stringify({ ...membership, verification_token: 'secret' }) });
+    const headers = { 'X-Renobot-Client-IP': '198.51.100.42', 'X-Renobot-Client-Port': '43210',
+      'X-Forwarded-For': '203.0.113.4' };
+    for (const trustedKofiProxyIp of [undefined, '127.0.0.2', '127.0.0.1']) {
+      const base = await startServer({ database, settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' },
+        ...(trustedKofiProxyIp ? { trustedKofiProxyIp } : {}) });
+      assert.equal((await fetch(`${base}/prod/kofi/${endpointId}`, { method: 'POST', body, headers })).status, 200);
+    }
+    assert.equal(sources.length, 3);
+    for (const source of sources.slice(0, 2)) {
+      assert.equal(source.viaProxy, false);
+      assert.equal(source.ip, '127.0.0.1');
+      assert.ok(source.port && source.port > 0);
+    }
+    assert.deepEqual({ ip: sources[2]?.ip, port: sources[2]?.port, viaProxy: sources[2]?.viaProxy,
+      peerIp: sources[2]?.peerIp }, { ip: '198.51.100.42', port: 43210, viaProxy: true, peerIp: '127.0.0.1' });
   });
 
   it('returns one stable webhook URL for a configured integration', async () => {
@@ -315,6 +351,66 @@ describe('dashboard routes', () => {
     assert.equal((await send()).status, 502);
     assert.equal((await send()).status, 502);
     assert.equal(attempts, 2);
+  });
+
+  it('restricts cross-modder receipts and sanitized webhook events to the configured owner', async () => {
+    const key = Buffer.alloc(32, 7);
+    const endpointId = 'v'.repeat(43);
+    const integration = { id: 'integration', accountId: 'account', endpointId, verificationTokenCiphertext: '' };
+    integration.verificationTokenCiphertext = encryptSetting('secret', key,
+      integrationSecretOwner(integration), 'verification-token');
+    let fail = false;
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      findIntegrationByEndpoint: async () => integration,
+      recordKofiReceipt: async () => {
+        if (fail) throw new Error('sensitive database error');
+        return 'accepted';
+      },
+      listAdminKofiEntries: async (/** @type {string | undefined} */ before) => ({
+        entries: before ? [] : [{ id: 'receipt', integration: { account: {
+          discordUserId: '12345678901234567', lastKnownUsername: 'modder',
+        } }, transactionId: 'tx', eventType: 'Subscription', amount: { toFixed: () => '5.00' },
+        currency: 'USD', receivedAt: new Date('2026-09-29T01:00:00Z'), outcome: 'recorded-no-entitlement',
+        sourceIp: '198.51.100.42', sourcePort: 43210, sourceViaProxy: true,
+        peerIp: '172.18.0.1', peerPort: 50000 }],
+        nextCursor: before ? null : 'receipt',
+      }),
+    }));
+    const baseUrl = await startServer({ database,
+      settingsConfig: { key, minimumAmount: '5.00', currency: 'USD' } });
+    const owner = { Cookie: `renobot_session=${createSession({ id: 'owner', username: 'owner' }, secret)}` };
+    const member = { Cookie: `renobot_session=${createSession({ id: 'member', username: 'member' }, secret)}` };
+    for (const path of ['/app/api/admin/kofi/entries', '/app/api/admin/kofi/operations']) {
+      assert.equal((await fetch(`${baseUrl}${path}`)).status, 401);
+      assert.equal((await fetch(`${baseUrl}${path}`, { headers: member })).status, 403);
+    }
+    assert.equal((await fetch(`${baseUrl}/app/api/admin/kofi/entries?before=%3Cscript%3E`, { headers: owner })).status, 400);
+    const send = (/** @type {string} */ token) => fetch(`${baseUrl}/prod/kofi/${endpointId}`, {
+      method: 'POST', body: new URLSearchParams({ data: JSON.stringify({
+        verification_token: token, message_id: 'membership', kofi_transaction_id: 'tx',
+        timestamp: '2026-09-29T01:00:00Z', type: 'Subscription', amount: '5.00', currency: 'USD',
+        email: 'private@example.com', message: 'private note',
+      }) }),
+    });
+    assert.equal((await send('wrong')).status, 403);
+    assert.equal((await send('secret')).status, 200);
+    fail = true;
+    assert.equal((await send('secret')).status, 502);
+    const operations = await fetch(`${baseUrl}/app/api/admin/kofi/operations`, { headers: owner });
+    assert.deepEqual((await operations.json()).events.map((/** @type {{event: string}} */ event) => event.event),
+      ['storage-failure', 'accepted', 'rejected']);
+    assert.doesNotMatch(JSON.stringify(await (await fetch(`${baseUrl}/app/api/admin/kofi/operations`,
+      { headers: owner })).json()), /secret|private|membership|sensitive database error|integration/u);
+    const entries = await fetch(`${baseUrl}/app/api/admin/kofi/entries`, { headers: owner });
+    assert.equal(entries.headers.get('cache-control'), 'no-store');
+    const listed = await entries.json();
+    assert.equal(listed.entries[0].ownerDiscordUserId, '12345678901234567');
+    assert.deepEqual({ ip: listed.entries[0].sourceIp, port: listed.entries[0].sourcePort,
+      viaProxy: listed.entries[0].sourceViaProxy }, { ip: '198.51.100.42', port: 43210, viaProxy: true });
+    assert.equal(listed.nextCursor, 'receipt');
+    assert.doesNotMatch(JSON.stringify(listed), /private@example|secret|verificationToken/u);
+    assert.deepEqual((await (await fetch(`${baseUrl}/app/api/admin/kofi/entries?before=receipt`,
+      { headers: owner })).json()).entries, []);
   });
 
   it('streams only verified receipt notices to the current authorized integration owner', async () => {

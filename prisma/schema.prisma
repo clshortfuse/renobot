@@ -59,6 +59,11 @@ model KofiEvent {
   entitlementExpiresAt     DateTime?            @map("entitlement_expires_at")
   renewedEntitlements      KofiEntitlement[]
   forwardDelivery          KofiForwardDelivery?
+  sourceIp                 String?              @map("source_ip")
+  sourcePort               Int?                 @map("source_port")
+  sourceViaProxy           Boolean              @default(false) @map("source_via_proxy")
+  peerIp                   String?              @map("peer_ip")
+  peerPort                 Int?                 @map("peer_port")
 
   @@unique([integrationId, messageId], map: "kofi_event_integration_id_message_id_key")
   @@unique([id, integrationId], map: "kofi_event_id_integration_id_key")
@@ -94,6 +99,15 @@ model SupporterRoleSync {
 
   @@index([nextAttemptAt], map: "supporter_role_sync_next_attempt_at_idx")
   @@map("supporter_role_sync")
+}
+
+model ManagedSupporterRole {
+  discordUserId String   @map("discord_user_id")
+  roleId        String   @map("role_id")
+  grantedAt     DateTime @default(now()) @map("granted_at")
+
+  @@id([discordUserId, roleId])
+  @@map("managed_supporter_role")
 }
 
 model KofiForwardDelivery {

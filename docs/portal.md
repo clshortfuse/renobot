@@ -63,6 +63,9 @@ second copy.
 | `POST /app/api/modder/kofi` | modder + CSRF | Save only the signed-in modder's Ko-fi settings. |
 | `GET /app/api/modder/kofi/events` | modder + signed session | SSE notifications for verified deliveries to the signed-in modder's integration. |
 | `GET /app/api/modder/kofi/entries?before=:cursor` | modder + signed session | Owner-scoped, paginated durable payment receipts. |
+| `GET /app/admin/kofi` | public page shell | Owner activity shell; sensitive data loads from owner-only APIs. |
+| `GET /app/api/admin/kofi/entries?before=:cursor` | configured owner + signed session | Paginated receipts across modder integrations, with account attribution. |
+| `GET /app/api/admin/kofi/operations` | configured owner + signed session | Last 100 sanitized webhook outcomes from this process only. |
 | `GET /app/admin` | public page shell | Administrative overview; data endpoints require `admin`. |
 | `GET /app/admin/appeals` | public page shell | Appeal review queue; data endpoints require `appeal:review`. |
 
@@ -73,9 +76,16 @@ and machine scopes must remain distinct.
 
 | Route | Authentication | Purpose |
 | --- | --- | --- |
-| `POST /prod/kofi/:endpointId` | Endpoint ID plus Ko-fi verification token | Deduplicate and store minimal test and real payment receipts; no roles or forwarding. |
+| `POST /prod/kofi/:endpointId` | Endpoint ID plus Ko-fi verification token | Deduplicate and store minimal test and real payment receipts; optionally queue membership sync, never wait for Discord. |
 
 Browser cookies must not authorize webhook requests.
+
+Owner activity is not raw container output. The operational view stores only
+timestamps and fixed outcome labels (`accepted`, `duplicate`, `rejected`,
+`storage-failure`) in memory, with no endpoint IDs, payloads, credentials,
+exception strings, or supporter data. It resets when the process restarts.
+The separate receipt view reads the durable SQLite ledger and is not affected
+by this in-memory retention limit.
 
 ## Authentication and capabilities
 
@@ -176,10 +186,12 @@ An internal-only Ko-fi ingestion core validates the checked-in payment schema,
 verifies an enabled integration's owner-bound secret, and durably deduplicates
 minimal event ledger rows by integration and message ID. The integration is
 checked again at write time. Events receive `recorded-no-entitlement` status;
-no qualification decision, entitlement, role sync, or forwarding job is created.
+by default no qualification decision, entitlement, role sync, or forwarding job is created.
 The enabled-integration entitlement core remains internal and integrations stay
-disabled for automated entitlements. The single webhook URL writes minimal
-entries for both test and real payments with no role change. Its URL and last
+disabled for automated entitlements unless `DISCORD_SUPPORTER_ROLE_ID` is set.
+The single webhook URL writes minimal entries for both test and real payments.
+With the role ID configured, qualifying subscriptions create a lease and queued
+Discord sync; the webhook does not wait for Discord. Its URL and last
 verified delivery time are visible only via the current-role-protected modder
 settings API. A test request does not prove a real payment, Ko-fi origin, or
 future entitlement readiness. Saving settings does not enable role grants.
@@ -295,9 +307,14 @@ single payment; the worker must read all active entitlements before acting.
 - `updatedAt`
 
 Enqueue in the same database transaction that changes an entitlement. The
-worker removes the record only after a successful reconciliation, including a
-confirmed not-in-guild result. Transient Discord failures remain queued for
-retry. Schedule reconciliation for expirations even when no new payments arrive.
+worker schedules the next check while any lease is active, including a
+confirmed not-in-guild result, and removes the job after successful
+reconciliation when no leases remain. Transient Discord failures remain queued
+for retry. Schedule reconciliation for expirations even when no new payments arrive.
+`ManagedSupporterRole` separately tracks users whose role Renobot actually
+added. The worker never adopts or removes a role it found already present.
+Opt-in role sync treats Ko-fi test payments as real payments because there is
+no trusted test marker; leave the role ID unset if that is unacceptable.
 
 #### `KofiForwardDelivery`
 
@@ -349,7 +366,7 @@ The modder Ko-fi page provides:
 The settings page currently stores the amount, owner-configured currency,
 write-only verification token, and optional write-only HTTPS destination.
 The destination is saved encrypted but is not contacted yet. Activation and
-supporter-role activation remain unavailable. An explicit `KOFI_ENCRYPTION_KEY` and
+supporter-role activation requires an explicit owner-set role ID. An explicit `KOFI_ENCRYPTION_KEY` and
 `DATABASE_URL` are required; losing the encryption key makes existing settings
 unreadable. The minimum initially supports one configured currency. Cross-currency
 conversion is out of scope until a trusted rate source and pricing policy are
@@ -373,7 +390,7 @@ envelopes. The authentication data binds the account ID, integration ID and
 specific secret field; decryption requires the separate application key and
 the integration's ownership context, and is not exposed by the settings API.
 Changing the key without re-encryption loses access to the secrets. Receipt
-ingestion is available; entitlement processing and forwarding remain disabled.
+ingestion is available; entitlement processing is opt-in and forwarding remains disabled.
 
 ## Ko-fi webhook processing
 
@@ -431,7 +448,7 @@ feature.
 
 Ko-fi reports successful payments but not membership cancellation. Model access
 as a renewable lease. Initially, each qualifying monthly payment extends the
-entitlement to payment time plus a documented grace period, proposed as 35 days.
+entitlement to payment time plus the selected 35-day lease.
 
 A scheduled reconciliation job and the durable `SupporterRoleSync` worker:
 

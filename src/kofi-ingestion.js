@@ -16,6 +16,8 @@ export const maxKofiBodyBytes = 256 * 1024;
  *   eventType: string, amount: string, currency: string, subscriptionPayment: boolean,
  *   firstSubscriptionPayment: boolean, occurredAt: Date, supporterDiscordUserId: string | null,
  *   tierName: string | null }>} KofiPayment */
+/** @typedef {Readonly<{ ip: string | null, port: number | null, viaProxy: boolean,
+ *   peerIp: string | null, peerPort: number | null }>} KofiDeliverySource */
 
 /**
  * Parse Ko-fi's one-field form, retaining only the values needed for the event ledger.
@@ -96,14 +98,16 @@ export async function ingestKofiPayment(database, key, endpointId, rawBody) {
  * @param {string} endpointId
  * @param {string | Buffer} rawBody
  * @param {(integrationId: string) => void} [onRecorded]
+ * @param {string} [membershipFloor]
+ * @param {KofiDeliverySource} [source]
  * @returns {Promise<'rejected' | 'accepted' | 'duplicate'>}
  */
-export async function receiveKofiReceipt(database, key, endpointId, rawBody, onRecorded) {
+export async function receiveKofiReceipt(database, key, endpointId, rawBody, onRecorded, membershipFloor, source) {
   const payment = parseKofiPayment(rawBody);
   if (!payment) return 'rejected';
   const integration = await database.findIntegrationByEndpoint(endpointId);
   if (!integration || !verifiedToken(integration, key, payment)) return 'rejected';
-  const result = await database.recordKofiReceipt(integration.id, integration.verificationTokenCiphertext, payment);
+  const result = await database.recordKofiReceipt(integration.id, integration.verificationTokenCiphertext, payment, membershipFloor, source);
   if (result === 'accepted') {
     try { onRecorded?.(integration.id); } catch { /* A live notice cannot undo an accepted receipt. */ }
   }

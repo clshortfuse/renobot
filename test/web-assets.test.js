@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { describe, it } from 'node:test';
 
-import { appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteJs } from '../src/web-assets.js';
+import { adminKofiPage, appPage, errorPage, homePage, modderKofiPage, notFoundPage, siteJs } from '../src/web-assets.js';
 
 describe('static portal assets', () => {
   it('keeps the proxy read timeout longer than the SSE heartbeat interval', () => {
@@ -16,7 +16,7 @@ describe('static portal assets', () => {
   });
 
   it('contains no template placeholders or server-side user data', () => {
-    for (const html of [appPage, modderKofiPage, errorPage, homePage, notFoundPage]) {
+    for (const html of [adminKofiPage, appPage, modderKofiPage, errorPage, homePage, notFoundPage]) {
       assert.match(html, /<!doctype html>/u);
       assert.doesNotMatch(html, /\{\{|<script(?! src="\/assets\/site\.js")/u);
     }
@@ -27,7 +27,7 @@ describe('static portal assets', () => {
     /** @type {Record<string, { textContent?: string, hidden?: boolean, value?: string, disabled?: boolean }>} */
     const elements = {
       username: {}, connection: {}, 'owner-badge': { hidden: true }, 'modder-badge': { hidden: true },
-      'reviewer-badge': { hidden: true }, 'kofi-link': { hidden: true }, 'portal-navigation': { hidden: true }, csrf: {}, 'sign-out': { disabled: true },
+      'reviewer-badge': { hidden: true }, 'kofi-link': { hidden: true }, 'admin-kofi-link': { hidden: true }, 'portal-navigation': { hidden: true }, csrf: {}, 'sign-out': { disabled: true },
     };
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
@@ -40,6 +40,7 @@ describe('static portal assets', () => {
     assert.equal(elements['owner-badge']?.hidden, false);
     assert.equal(elements['modder-badge']?.hidden, true);
     assert.equal(elements['kofi-link']?.hidden, false);
+    assert.equal(elements['admin-kofi-link']?.hidden, false);
     assert.equal(elements['portal-navigation']?.hidden, false);
     assert.equal(elements.csrf?.value, 'csrf-value');
     assert.equal(elements['sign-out']?.disabled, false);
@@ -47,7 +48,7 @@ describe('static portal assets', () => {
 
   it('shows only role-derived status and keeps unfinished destinations unlinked', async () => {
     const elements = Object.fromEntries(['username', 'connection', 'csrf', 'sign-out', 'owner-badge',
-      'modder-badge', 'reviewer-badge', 'kofi-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
+      'modder-badge', 'reviewer-badge', 'kofi-link', 'admin-kofi-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
@@ -59,12 +60,13 @@ describe('static portal assets', () => {
     assert.equal(elements['reviewer-badge']?.hidden, true);
     assert.equal(elements['portal-navigation']?.hidden, false);
     assert.equal(elements['kofi-link']?.hidden, false);
-    assert.doesNotMatch(appPage, /href="\/app\/admin/u);
+    assert.equal(elements['admin-kofi-link']?.hidden, true);
+    assert.doesNotMatch(appPage, /href="\/app\/admin(?:"|\/appeals)/u);
   });
 
   it('fails closed when capability discovery fails after sign-in', async () => {
     const elements = Object.fromEntries(['username', 'connection', 'csrf', 'sign-out', 'owner-badge',
-      'modder-badge', 'reviewer-badge', 'kofi-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
+      'modder-badge', 'reviewer-badge', 'kofi-link', 'admin-kofi-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
       fetch: async (/** @type {string} */ path) => path === '/auth/session'
@@ -101,10 +103,37 @@ describe('static portal assets', () => {
     assert.equal(elements.username?.textContent, 'Unavailable');
   });
 
+  it('renders owner receipts and in-memory event labels as DOM text only', async () => {
+    /** @type {Record<string, any>} */
+    const nodes = Object.fromEntries(['admin-kofi-status', 'admin-kofi-content', 'admin-entries-more',
+      'admin-entries-status', 'admin-entries-list', 'admin-operations-list', 'admin-operations-status',
+      'admin-operations-refresh'].map((id) => [id, { hidden: true, addEventListener() {}, replaceChildren() {} }]));
+    /** @type {{textContent: string}[]} */
+    let entries = [];
+    /** @type {{textContent: string}[]} */
+    let operations = [];
+    nodes['admin-entries-list'].replaceChildren = (/** @type {{textContent: string}[]} */ ...items) => { entries = items; };
+    nodes['admin-operations-list'].replaceChildren = (/** @type {{textContent: string}[]} */ ...items) => { operations = items; };
+    await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
+      document: { body: { dataset: { page: 'admin-kofi' } },
+        getElementById: (/** @type {string} */ id) => nodes[id], createElement: () => ({ textContent: '' }) },
+      fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session' ? { username: 'owner' }
+        : path.endsWith('/operations') ? { events: [{ at: '2026-09-29T01:00:00Z', event: 'accepted' }] }
+          : { entries: [{ id: 'receipt', ownerDiscordUserId: '12345678901234567', ownerUsername: '<script>',
+            receivedAt: '2026-09-29T01:00:00Z', eventType: 'Subscription', amount: '5.00',
+            currency: 'USD', transactionId: 'tx', outcome: 'recorded-no-entitlement' }], nextCursor: null } }),
+    });
+    assert.equal(nodes['admin-kofi-content'].hidden, false);
+    assert.match(entries[0]?.textContent ?? '', /<script>.*5\.00 USD/u);
+    assert.match(operations[0]?.textContent ?? '', /accepted/u);
+    assert.match(nodes['admin-operations-status'].textContent, /current process only/u);
+    assert.doesNotMatch(adminKofiPage, /private@example|fixture-token|<script(?! src="\/assets\/site\.js")/u);
+  });
+
   it('renders own webhook and paged payment receipts as DOM text without stored secrets', async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'kofi-form', 'minimum-amount', 'currency',
-      'floor-note', 'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-webhook-status',
+      'floor-note', 'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status',
       'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more']
       .map((id) => [id, { hidden: true, value: '' }]));
     nodes['kofi-form'] = { hidden: true, addEventListener() {} };
@@ -153,6 +182,7 @@ describe('static portal assets', () => {
     assert.equal(nodes['forward-status'].textContent, 'Destination configured (value hidden)');
     assert.equal(nodes['floor-note'].textContent, 'Minimum allowed: 5.00 USD');
     assert.equal(nodes['kofi-prod-url'].textContent, 'https://renobot.example/prod/kofi/private-id');
+    assert.match(nodes['kofi-role-status'].textContent, /role sync is disabled/u);
     assert.ok(onReceipt);
     onReceipt();
     await new Promise((resolve) => setImmediate(resolve));
@@ -174,7 +204,7 @@ describe('static portal assets', () => {
   it('explains why a webhook URL is missing before the verification token is saved', async () => {
       /** @type {Record<string, any>} */
       const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
-        'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-webhook-status',
+        'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status',
         'kofi-entries'].map((id) => [id, { hidden: true }]));
       nodes['kofi-form'] = { hidden: true, addEventListener() {} };
       await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
@@ -194,7 +224,7 @@ describe('static portal assets', () => {
     const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
       'token-status', 'forward-status',
       'verification-token', 'forward-action', 'forward-url', 'save-settings',
-      'kofi-prod', 'kofi-prod-url', 'kofi-webhook-status', 'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more']
+      'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status', 'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more']
       .map((id) => [id, { value: '', hidden: true, disabled: false }]));
     nodes['kofi-entries-list'].replaceChildren = () => {};
     nodes['kofi-entries-more'].addEventListener = () => {};
@@ -239,7 +269,7 @@ describe('static portal assets', () => {
     assert.equal(nodes['forward-url'].value, '');
     assert.equal(nodes['forward-action'].value, 'keep');
     assert.equal(nodes['token-status'].textContent, 'Token configured (value hidden)');
-    assert.equal(nodes['settings-status'].textContent, 'Settings saved. Supporter roles and forwarding remain inactive.');
+    assert.equal(nodes['settings-status'].textContent, 'Settings saved. See role activation status below; forwarding remains inactive.');
     assert.equal(streams, 1);
     assert.equal(nodes['kofi-prod'].hidden, false);
     submit({ preventDefault() {} });
