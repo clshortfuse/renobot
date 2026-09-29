@@ -40,6 +40,7 @@ function deliverySource(incoming, trustedProxyIp) {
  */
 export function createWebServer(options) {
   const request = options.request ?? fetch;
+  let importingEarlyAccess = false;
   /** @type {{ at: string, event: 'accepted' | 'duplicate' | 'rejected' | 'storage-failure' }[]} */
   const recentWebhookEvents = [];
   /** @param {'accepted' | 'duplicate' | 'rejected' | 'storage-failure'} event */
@@ -141,6 +142,35 @@ export function createWebServer(options) {
         }
         sendJson(response, 200, { username: session.username, ready: options.bot.isReady(),
           owner: session.id === options.config.ownerUserId, csrf: csrfToken(token ?? '', options.config.sessionSecret) });
+        return;
+      }
+      if (incoming.method === 'POST' && url.pathname === '/app/api/admin/early-access/import') {
+        const token = readCookie(incoming.headers.cookie, sessionCookie);
+        const session = readSession(token, options.config.sessionSecret);
+        if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
+        if (session.id !== options.config.ownerUserId) { sendJson(response, 403, { error: 'Access denied' }); return; }
+        if (!options.database || !options.settingsConfig || !options.earlyAccessRoleId) {
+          sendJson(response, 503, { error: 'Early-access ledger is unavailable' }); return;
+        }
+        if (!incoming.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) {
+          sendJson(response, 415, { error: 'Unsupported content type' }); return;
+        }
+        const body = await readForm(incoming, 4096);
+        if (!verifyCsrfToken(body.get('csrf') ?? '', token ?? '', options.config.sessionSecret)) {
+          sendJson(response, 403, { error: 'Invalid CSRF token' }); return;
+        }
+        const after = body.get('after') ?? undefined;
+        if ([...body.keys()].some((key) => !['csrf', 'after'].includes(key) || body.getAll(key).length !== 1)
+          || after !== undefined && !/^[A-Za-z0-9_-]{1,64}$/u.test(after)) {
+          sendJson(response, 400, { error: 'Invalid import cursor' }); return;
+        }
+        if (importingEarlyAccess) { sendJson(response, 409, { error: 'Import already running' }); return; }
+        importingEarlyAccess = true;
+        try {
+          const result = await options.database.backfillEarlyAccess(options.settingsConfig.currency, after);
+          if (!result) { sendJson(response, 400, { error: 'Invalid import cursor' }); return; }
+          sendJson(response, 200, result);
+        } finally { importingEarlyAccess = false; }
         return;
       }
       if (incoming.method === 'POST' && /^\/app\/api\/admin\/early-access\/[^/]+\/approve$/u.test(url.pathname)) {

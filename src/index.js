@@ -44,7 +44,6 @@ try {
     || !settingsConfig || !database)) {
     throw new Error('DISCORD_EARLY_ACCESS_ROLE_ID requires a distinct Discord role ID and Ko-fi database settings.');
   }
-  if (earlyAccessRoleId && database && settingsConfig) await database.backfillEarlyAccess(settingsConfig.currency);
   const webServer = webConfig ? createWebServer({ bot: client, config: webConfig, logger,
     ...(database ? { database } : {}), ...(settingsConfig ? { settingsConfig } : {}),
     ...(supporterRoleId ? { supporterRoleId } : {}),

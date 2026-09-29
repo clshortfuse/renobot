@@ -149,7 +149,7 @@ function startRoleWorker(database, bot, guildId, roleId, logger, reconcile) {
         if (!await reconcile(database, bot, guildId, roleId)) break;
       }
     } catch (error) {
-      logger.warn({ err: error }, 'Supporter role reconciliation unavailable');
+      logger.warn({ err: error, roleId }, 'Role reconciliation unavailable');
     } finally { running = false; }
   }
   const timer = setInterval(() => { void tick(); }, 30_000);
