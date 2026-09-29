@@ -4,7 +4,6 @@
  *   clientSecret: string,
  *   guildId: string,
  *   host: string,
- *   kofiTestMode: boolean,
  *   modderRoleId: string | undefined,
  *   moderatorRoleId: string | undefined,
  *   ownerUserId: string,
@@ -19,8 +18,6 @@
  * @returns {WebConfig | undefined}
  */
 export function readWebConfig(environment = process.env) {
-  const testMode = environment.KOFI_TEST_MODE?.trim() || 'false';
-  if (!['true', 'false'].includes(testMode)) throw new Error('KOFI_TEST_MODE must be true or false.');
   const names = [
     'DISCORD_CLIENT_ID',
     'DISCORD_CLIENT_SECRET',
@@ -30,7 +27,7 @@ export function readWebConfig(environment = process.env) {
     'SESSION_SECRET',
   ];
   const dashboardNames = ['DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL', 'SESSION_SECRET'];
-  if (!dashboardNames.some((name) => environment[name]?.trim()) && testMode === 'false') return undefined;
+  if (!dashboardNames.some((name) => environment[name]?.trim())) return undefined;
   const configured = names.filter((name) => environment[name]?.trim());
   if (configured.length !== names.length) {
     throw new Error(`Dashboard configuration requires ${names.join(', ')}.`);
@@ -63,7 +60,6 @@ export function readWebConfig(environment = process.env) {
     clientSecret,
     guildId,
     host: environment.HTTP_HOST?.trim() || '127.0.0.1',
-    kofiTestMode: testMode === 'true',
     modderRoleId,
     moderatorRoleId,
     ownerUserId,

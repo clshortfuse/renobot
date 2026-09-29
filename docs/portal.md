@@ -26,9 +26,9 @@ also leave a clean path for account information, requests, and ban appeals.
 - Keep runtime and test source in plain JavaScript with ESM and JSDoc/checkJs.
 - Run one Renobot replica until scheduled work and database coordination are
   designed for multiple replicas.
-- Do not offer modders a production Ko-fi webhook URL until Renobot can durably
-  accept payments, reconcile the shared role, and forward to existing webhook
-  destinations. Ko-fi offers only one webhook destination per creator.
+- A single Ko-fi URL stores receipts, including test payments. Do not claim that it reconciles the
+  shared role or forwards to an existing webhook destination. Ko-fi offers only
+  one webhook destination per creator.
 
 ## Route structure
 
@@ -43,7 +43,8 @@ also leave a clean path for account information, requests, and ban appeals.
 | `GET /auth/discord` | Start Discord OAuth. |
 | `GET /auth/discord/callback` | Complete Discord OAuth and create a session. |
 | `POST /auth/logout` | Clear the current session. |
-| `GET /health` | Internal container health check. |
+| `GET /health` | Combined bot/database readiness. |
+| `GET /health/webhook` | Container health check; Ko-fi database readiness independent of Discord. |
 
 The canonical RenoDX privacy policy remains at
 `https://renodx.com/privacy.html`. Renobot links to it rather than maintaining a
@@ -61,6 +62,7 @@ second copy.
 | `GET /app/api/modder/kofi` | modder | Read only safe Ko-fi configuration status. |
 | `POST /app/api/modder/kofi` | modder + CSRF | Save only the signed-in modder's Ko-fi settings. |
 | `GET /app/api/modder/kofi/events` | modder + signed session | SSE notifications for verified deliveries to the signed-in modder's integration. |
+| `GET /app/api/modder/kofi/entries?before=:cursor` | modder + signed session | Owner-scoped, paginated durable payment receipts. |
 | `GET /app/admin` | public page shell | Administrative overview; data endpoints require `admin`. |
 | `GET /app/admin/appeals` | public page shell | Appeal review queue; data endpoints require `appeal:review`. |
 
@@ -71,8 +73,7 @@ and machine scopes must remain distinct.
 
 | Route | Authentication | Purpose |
 | --- | --- | --- |
-| `POST /test/kofi/:endpointId` | Endpoint ID plus Ko-fi verification token | Verify and discard Ko-fi-format deliveries; record a success timestamp only. |
-| `POST /webhooks/kofi/:endpointId` | Endpoint ID plus Ko-fi verification token | Receive a creator's Ko-fi payment events. |
+| `POST /prod/kofi/:endpointId` | Endpoint ID plus Ko-fi verification token | Deduplicate and store minimal test and real payment receipts; no roles or forwarding. |
 
 Browser cookies must not authorize webhook requests.
 
@@ -176,26 +177,21 @@ verifies an enabled integration's owner-bound secret, and durably deduplicates
 minimal event ledger rows by integration and message ID. The integration is
 checked again at write time. Events receive `recorded-no-entitlement` status;
 no qualification decision, entitlement, role sync, or forwarding job is created.
-No production webhook route or worker invokes this core yet, and integrations
-remain disabled. A separate test-only POST route, explicitly enabled by
-`KOFI_TEST_MODE=true`, validates an incoming form
-and verification token, then discards all payload data and records only the
-last successful verification time. It never invokes event recording, even if
-the submitted payload represents a real payment. Its URL and timestamp are
-visible only via the current-role-protected modder settings API; changing the
-verification token clears the timestamp. A test request is not proof of a
-real payment, Ko-fi origin, or future production readiness. Saving settings
-does not enable payment ingestion or supporter-role grants.
+The enabled-integration entitlement core remains internal and integrations stay
+disabled for automated entitlements. The single webhook URL writes minimal
+entries for both test and real payments with no role change. Its URL and last
+verified delivery time are visible only via the current-role-protected modder
+settings API. A test request does not prove a real payment, Ko-fi origin, or
+future entitlement readiness. Saving settings does not enable role grants.
 
 The open modder portal subscribes through `EventSource` to an authenticated
 `text/event-stream` endpoint. Its signed session cookie identifies the modder;
 this is **not** JWT authentication. The server resolves current Discord modder
 access and the owned integration on connection and rechecks both before each
-notification. After successful token verification and timestamp persistence,
-an in-process integration-scoped pub/sub fan-out sends only receipt time,
-event type, amount, currency, and subscription flag. It never sends the raw
-payload, token, supporter identifiers, messages, or shipping data. The page
-uses DOM text, not HTML, to display the result. Streams reconnect with renewed
+notification. After a verified receipt commits, an in-process
+integration-scoped pub/sub fan-out sends only a refresh signal. It never sends
+the raw payload, token, supporter identifiers, messages, or shipping data. The
+page refreshes owner-scoped stored entries using DOM text, not HTML. Streams reconnect with renewed
 authorization and close after five minutes; the pub/sub state is local to the
 single bot replica and live notifications are not replayed across restarts.
 
@@ -228,6 +224,7 @@ flag. An account has at most one Ko-fi integration.
 - `forwardUrlCiphertext` — nullable
 - `enabled`
 - `lastWebhookAt` — nullable
+- `lastTestAt` — legacy nullable column; unused by the single-webhook receipt flow
 - `lastForwardedAt` — nullable
 - `createdAt`
 - `updatedAt`
@@ -340,42 +337,43 @@ user may not be a current member.
 
 The modder Ko-fi page provides:
 
-- a generated webhook URL **only after** payment ingestion, role reconciliation,
-  and courtesy forwarding are operational; prior versions show configuration
-  status without inviting the creator to switch their sole Ko-fi webhook;
+- one receipt URL; it neither changes roles nor forwards data,
+  so do not replace a working live destination without accepting that limit;
 - verification-token entry/replacement;
 - minimum recurring amount and currency;
 - optional courtesy-forwarding URL;
 - enable/disable control only after end-to-end payment/forwarding/role tests;
-- last received event and forwarding status;
+- last recorded receipts and future forwarding status;
 - concise setup instructions linking to Ko-fi's webhook page.
 
 The settings page currently stores the amount, owner-configured currency,
 write-only verification token, and optional write-only HTTPS destination.
 The destination is saved encrypted but is not contacted yet. Activation and
-creator webhook URL remain unavailable. An explicit `KOFI_ENCRYPTION_KEY` and
+supporter-role activation remain unavailable. An explicit `KOFI_ENCRYPTION_KEY` and
 `DATABASE_URL` are required; losing the encryption key makes existing settings
 unreadable. The minimum initially supports one configured currency. Cross-currency
 conversion is out of scope until a trusted rate source and pricing policy are
 selected. The server owner sets the eligibility floor; a modder may choose a
 higher minimum, but must not lower the server-wide floor.
 
-Configured modders can see a **test-only** URL and their last verified test
-delivery time. While their portal page is open, a successful delivery also
-appears immediately through SSE with a safe, minimal payment summary. POSTing
-Ko-fi-format data there can check form parsing and the
-stored verification token without persisting a payment or triggering roles or
-forwarding. Ko-fi's tester behavior has not been verified from its authenticated
+Configured modders can see their single webhook URL and last verified delivery
+time. Both Ko-fi test deliveries and real payments produce minimal deduplicated
+receipts visible only to the owning modder; authenticated SSE prompts a ledger
+refresh after a committed entry. Test deliveries may contain a fake Discord ID,
+but receipt storage does not depend on a guild member, role, or forwarding.
+Deliveries never change Discord roles.
+Ko-fi's tester behavior has not been verified from its authenticated
 dashboard; do not replace an existing live webhook destination just to run a
 test. If the tester requires changing the creator's sole webhook URL, wait for
-production activation instead. No test flag in the payload is trusted.
+role activation instead. No test flag in the payload is trusted; stored test
+payments must not be treated as a confirmed production entitlement.
 
 Secrets are encrypted before Prisma writes with authenticated AES-256-GCM `v1:`
 envelopes. The authentication data binds the account ID, integration ID and
 specific secret field; decryption requires the separate application key and
 the integration's ownership context, and is not exposed by the settings API.
-Changing the key without re-encryption loses access to the secrets. Webhook
-processing and forwarding remain disabled.
+Changing the key without re-encryption loses access to the secrets. Receipt
+ingestion is available; entitlement processing and forwarding remain disabled.
 
 ## Ko-fi webhook processing
 
@@ -388,12 +386,13 @@ Process each request as follows:
 
 1. Apply a strict body-size limit and content-type check.
 2. Parse the form and JSON payload.
-3. Find the enabled integration using `endpointId`.
+3. Find the integration using `endpointId` (entitlement activation is separate).
 4. Compare `verification_token` in constant time with the decrypted configured
    token.
 5. Validate required payload fields and supported types.
-6. Insert the event using `(integrationId, messageId)` for idempotency.
-7. Classify the event without retaining unnecessary personal data. Reject
+6. Insert a minimal receipt using `(integrationId, messageId)` for idempotency;
+  commit before acknowledging, without granting roles or forwarding.
+7. **Future entitlement work:** Classify the event without retaining unnecessary personal data. Reject
   implausibly future-dated payments; do not grant access from payments already
   outside the entitlement window. Define the allowable timestamp skew before
   production, and distinguish Ko-fi test events from real payments using
@@ -580,7 +579,8 @@ capabilities; non-members can still reach eligible general portal features.
 Status: account and Ko-fi integration/event/entitlement/role-sync/outbox
 tables and a checked-in SQLite migration exist. The generated client build, account
 repository, opt-in startup/readiness, and pre-switch deployment migration are
-implemented. Ko-fi processing and access flows remain unimplemented. Host
+implemented. Ko-fi receipt ingestion and modder access are implemented, but
+entitlement processing is not. Host
 directory provisioning remains an operator responsibility, and off-host backups
 are deferred. Tests cover the schema, repository contract, and HTTP/deployment
 boundaries. The SQLite migration and database constraints pass isolated file
@@ -604,28 +604,27 @@ Status: a public static settings shell and protected read/write API now support
 each modder's own inactive Ko-fi configuration. Role, CSRF, validation,
 encrypted-at-rest, and per-owner persistence behavior have unit, HTTP, and
 SQLite integration tests. A live production deployment is not configured.
-Webhook URL/activation, last-event reporting, and courtesy forwarding are
-still deferred to later phases.
+Webhook receipt URL and paged ledger reporting are available; entitlement/role
+activation and courtesy forwarding remain deferred to later phases.
 
 - Add `/app/modder` and `/app/modder/kofi`.
 - Generate endpoint IDs securely.
 - Encrypt and save verification tokens and optional forward URLs.
 - Provide write-only secret replacement and configuration status.
 - Add owner visibility only after explicit administrative requirements are set.
-- Keep the webhook URL and activation control unavailable to modders until
-  Phases 5–7 pass the end-to-end acceptance checks. Do not instruct anyone to
-  replace an existing Ko-fi destination yet.
+- Keep supporter-role activation unavailable until Phases 5–7 pass end-to-end
+  acceptance checks. Do not instruct anyone to replace a working Ko-fi destination yet.
 
-Exit criteria: an authorized modder can configure only their own integration and
-see its setup status; no production webhook traffic is accepted for that
-integration yet.
+Receipt-only milestone: an authorized modder can configure only their own
+integration and view its single webhook and receipts; no role change occurs.
 
 ### Phase 5 — Ko-fi ingestion, event ledger, and delivery outboxes
 
 - Add bounded form-body parsing.
 - Add schema validation and normalized payment parsing.
 - Authenticate creator-specific webhook requests.
-- Persist idempotent sanitized events.
+- Persist idempotent sanitized events. This receipt-only portion is implemented
+  for both test and real deliveries.
 - Implement qualifying entitlement renewal and persist role-sync tasks in the
   same transaction as the event and entitlement changes.
 - Add encrypted forwarding outbox and safe, retryable HTTPS delivery, including
@@ -637,10 +636,10 @@ integration yet.
   owner-controlled staging integration for real Ko-fi test deliveries; do not
   ask a participating modder to replace an existing production webhook yet.
 
-Exit criteria: isolated test events are persisted exactly once together with
-required outbox work, invalid events are safely rejected, forwarding works
-across restarts, and sensitive fields never enter logs or the event ledger.
-Creator webhook URLs remain unavailable for production use.
+Remaining exit criteria: required outbox work is persisted exactly once,
+forwarding works across restarts, and sensitive fields never enter logs or the
+event ledger. The existing URL stores receipts only and is not a substitute
+for a creator's working forwarding destination.
 
 ### Phase 6 — Supporter entitlements and Discord roles
 
@@ -661,7 +660,7 @@ restarts. A Discord outage or confirmed non-member does not erase entitlements.
   delivery to the owner-controlled staging integration, then verify each
   participating creator's settings without making a synthetic test payment
   grant a production supporter role.
-- Expose the stable creator webhook URL and enable control in the modder portal.
+- Enable entitlement control in the modder portal; the stable receipt URL is already exposed.
 - Show forwarding and role-sync status without exposing payload data.
 - Publish privacy disclosure and retention controls for forwarding.
 - Document a rollback procedure to restore the creator's prior webhook URL if

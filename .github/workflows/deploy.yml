@@ -108,29 +108,10 @@ jobs:
       - name: Deploy image
         env:
           IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
-          KOFI_TEST_MODE_VARIABLE: ${{ vars.KOFI_TEST_MODE }}
-          KOFI_TEST_MODE_SECRET: ${{ secrets.KOFI_TEST_MODE }}
           KOFI_ENCRYPTION_KEY: ${{ secrets.KOFI_ENCRYPTION_KEY }}
         run: |
-          if [[ -n "$KOFI_TEST_MODE_VARIABLE" && -n "$KOFI_TEST_MODE_SECRET"
-            && "$KOFI_TEST_MODE_VARIABLE" != "$KOFI_TEST_MODE_SECRET" ]]; then
-            echo 'Conflicting KOFI_TEST_MODE environment variable and secret.' >&2
-            exit 2
-          fi
-          mode=${KOFI_TEST_MODE_VARIABLE:-${KOFI_TEST_MODE_SECRET:-false}}
-          if [[ "$mode" != true && "$mode" != false ]]; then
-            echo 'KOFI_TEST_MODE must be true or false.' >&2
-            exit 2
-          fi
-          if [[ -n "$KOFI_TEST_MODE_VARIABLE" ]]; then
-            echo 'Ko-fi test mode source: production environment variable.'
-          elif [[ -n "$KOFI_TEST_MODE_SECRET" ]]; then
-            echo 'Ko-fi test mode source: production environment secret.'
-          else
-            echo 'Ko-fi test mode is not configured; defaulting to false.'
-          fi
           if [[ -z "$KOFI_ENCRYPTION_KEY" ]]; then
             echo 'The production KOFI_ENCRYPTION_KEY environment secret is required.' >&2
             exit 2
           fi
-          printf '%s\n' "$KOFI_ENCRYPTION_KEY" | ssh production /opt/renobot/deploy.sh "$IMAGE" "$mode"
+          printf '%s\n' "$KOFI_ENCRYPTION_KEY" | ssh production /opt/renobot/deploy.sh "$IMAGE"

@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 || ! "$1" =~ ^ghcr\.io/.+@sha256:[[:xdigit:]]{64}$
-  || ( "${2:-false}" != true && "${2:-false}" != false ) ]]; then
-  echo 'Usage: deploy.sh ghcr.io/owner/image@sha256:digest [true|false]' >&2
+if [[ $# -ne 1 || ! "$1" =~ ^ghcr\.io/.+@sha256:[[:xdigit:]]{64}$ ]]; then
+  echo 'Usage: deploy.sh ghcr.io/owner/image@sha256:digest' >&2
   exit 2
 fi
 
 cd /opt/renobot
 new_image=$1
-test_mode=${2:-false}
-unset KOFI_TEST_MODE
 unset KOFI_ENCRYPTION_KEY
 if ! IFS= read -r kofi_key || [[ -z "$kofi_key" ]]; then
   echo 'A Ko-fi encryption key must be supplied on stdin.' >&2
@@ -22,16 +19,14 @@ if [[ ! "$kofi_key" =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
   exit 2
 fi
 previous_image=$(sed -n 's/^RENOBOT_IMAGE=//p' .deploy.env 2>/dev/null || true)
-previous_test_mode=$(sed -n 's/^KOFI_TEST_MODE=//p' .deploy.env 2>/dev/null || true)
 previous_key=$(sed -n 's/^KOFI_ENCRYPTION_KEY=//p' .deploy.env 2>/dev/null || true)
 if [[ -z "$previous_key" ]]; then
   previous_key=$(sed -n 's/^KOFI_ENCRYPTION_KEY=//p' /etc/renobot/renobot.env 2>/dev/null || true)
 fi
-if [[ "$previous_test_mode" != true ]]; then previous_test_mode=false; fi
 (
   umask 077
-  printf 'RENOBOT_IMAGE=%s\nKOFI_TEST_MODE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
-    "$new_image" "$test_mode" "$kofi_key" > .deploy.env.next
+  printf 'RENOBOT_IMAGE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
+    "$new_image" "$kofi_key" > .deploy.env.next
   chmod 600 .deploy.env.next
 )
 docker compose --env-file .deploy.env.next -f compose.yaml pull app
@@ -114,8 +109,8 @@ rm -f /opt/renobot/public.next
 if [[ -n "$previous_image" ]]; then
   (
     umask 077
-    printf 'RENOBOT_IMAGE=%s\nKOFI_TEST_MODE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
-      "$previous_image" "$previous_test_mode" "$previous_key" > .deploy.env
+    printf 'RENOBOT_IMAGE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
+      "$previous_image" "$previous_key" > .deploy.env
     chmod 600 .deploy.env
   )
   docker compose --env-file .deploy.env -f compose.yaml up -d --no-deps --wait app

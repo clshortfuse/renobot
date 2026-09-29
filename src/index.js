@@ -31,18 +31,21 @@ try {
   const webConfig = readWebConfig();
   const settingsConfig = readModderSettingsConfig();
   if (settingsConfig && !database) throw new Error('Modder settings require DATABASE_URL.');
-  if (webConfig?.kofiTestMode && (!settingsConfig || !database)) {
-    throw new Error('KOFI_TEST_MODE requires Ko-fi settings and DATABASE_URL.');
-  }
   const webServer = webConfig ? createWebServer({ bot: client, config: webConfig, logger,
     ...(database ? { database } : {}), ...(settingsConfig ? { settingsConfig } : {}) }) : undefined;
   const shutDown = createShutdown({ client, logger, ...(webServer ? { webServer } : {}), ...(database ? { database } : {}) });
+  let stopping = false;
+  /** @type {NodeJS.Timeout | undefined} */
+  let loginRetry;
   installProcessHandlers({
     logger,
-    shutDown,
+    shutDown: async (reason, exitCode) => {
+      stopping = true;
+      if (loginRetry) clearTimeout(loginRetry);
+      await shutDown(reason, exitCode);
+    },
   });
 
-  await client.login(config.token);
   if (webConfig && webServer) {
     await new Promise((resolve, reject) => {
       webServer.once('error', reject);
@@ -53,6 +56,17 @@ try {
     });
     logger.info({ host: webConfig.host, port: webConfig.port }, 'Renobot dashboard is listening');
   }
+  async function connectBot() {
+    if (stopping) return;
+    try {
+      await client.login(config.token);
+    } catch (error) {
+      if (stopping) return;
+      logger.warn({ err: error }, 'Discord login failed; webhook receipts remain available, retrying');
+      loginRetry = setTimeout(() => { void connectBot(); }, 30_000);
+    }
+  }
+  void connectBot();
 } catch (error) {
   logger.fatal({ err: error }, 'Renobot failed to start');
   await database?.disconnect();

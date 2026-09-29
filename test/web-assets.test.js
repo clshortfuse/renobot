@@ -101,78 +101,103 @@ describe('static portal assets', () => {
     assert.equal(elements.username?.textContent, 'Unavailable');
   });
 
-  it('renders own modder settings and the test-only URL as DOM text without stored secrets', async () => {
+  it('renders own webhook and paged payment receipts as DOM text without stored secrets', async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'kofi-form', 'minimum-amount', 'currency',
-      'floor-note', 'token-status', 'forward-status', 'test-setup', 'test-setup-status',
-      'kofi-test', 'kofi-test-url', 'kofi-test-status', 'kofi-test-details']
+      'floor-note', 'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-webhook-status',
+      'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more']
       .map((id) => [id, { hidden: true, value: '' }]));
     nodes['kofi-form'] = { hidden: true, addEventListener() {} };
-    /** @type {((event: { data: string }) => void) | undefined} */
-    let onDelivery;
+    nodes['kofi-entries-more'].addEventListener = () => {};
+    /** @type {{ textContent: string }[]} */
+    let rendered = [];
+    /** @param {{ textContent: string }[]} items */
+    function replaceChildren(...items) { rendered = items; }
+    nodes['kofi-entries-list'].replaceChildren = replaceChildren;
+    /** @param {{ textContent: string }[]} items */
+    function append(...items) { rendered.push(...items); }
+    nodes['kofi-entries-list'].append = append;
+    /** @type {(() => void) | undefined} */
+    let loadOlder;
+    nodes['kofi-entries-more'].addEventListener = (/** @type {string} */ event, /** @type {() => void} */ callback) => {
+      assert.equal(event, 'click');
+      loadOlder = callback;
+    };
+    /** @type {(() => void) | undefined} */
+    let onReceipt;
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
-      document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id] },
+      document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id],
+        createElement: () => ({ textContent: '' }) },
       EventSource: class {
         /** @param {string} url */
         constructor(url) { assert.equal(url, '/app/api/modder/kofi/events'); }
-        /** @param {string} event @param {typeof onDelivery} callback */
-        addEventListener(event, callback) { assert.equal(event, 'test-delivery'); onDelivery = callback; }
+        /** @param {string} event @param {() => void} callback */
+        addEventListener(event, callback) { assert.equal(event, 'receipt'); onReceipt = callback; }
       },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
         ? { username: '<script>', csrf: 'secret-csrf' }
-        : { minimumAmount: '5.00', currency: 'USD', floor: '5.00', testModeEnabled: true,
+        : path.startsWith('/app/api/modder/kofi/entries') ? path.includes('?before=older-id')
+          ? { entries: [{ occurredAt: '2026-09-27T12:00:00Z', receivedAt: '2026-09-27T12:00:01Z',
+            eventType: 'Donation', transactionId: 'older-tx',
+            amount: '1.00', currency: 'USD', supporterDiscordUserId: null, tierName: null,
+            subscriptionPayment: false, outcome: 'recorded-no-entitlement' }], nextCursor: null }
+          : { entries: [{ occurredAt: '2026-09-28T12:00:00Z', receivedAt: '2026-09-28T12:00:01Z', eventType: '<script>',
+            transactionId: 'tx-1', amount: '5.00', currency: 'USD', supporterDiscordUserId: null,
+            tierName: null, subscriptionPayment: true, outcome: 'recorded-no-entitlement' }], nextCursor: 'older-id' }
+          : { minimumAmount: '5.00', currency: 'USD', floor: '5.00',
           hasVerificationToken: true, hasForwardUrl: true,
-          testUrl: 'https://renobot.example/test/kofi/private-id', lastTestAt: null } }),
+          prodUrl: 'https://renobot.example/prod/kofi/private-id', lastWebhookAt: null } }),
     });
     assert.equal(nodes['kofi-form'].hidden, false);
-    assert.equal(nodes['test-setup'].hidden, false);
-    assert.match(nodes['test-setup-status'].textContent, /Your test-only URL is below/u);
     assert.equal(nodes['token-status'].textContent, 'Token configured (value hidden)');
     assert.equal(nodes['forward-status'].textContent, 'Destination configured (value hidden)');
     assert.equal(nodes['floor-note'].textContent, 'Minimum allowed: 5.00 USD');
-    assert.equal(nodes['kofi-test-url'].textContent, 'https://renobot.example/test/kofi/private-id');
-    assert.equal(nodes['kofi-test-status'].textContent, 'No verified test delivery yet.');
-    assert.ok(onDelivery);
-    onDelivery({ data: JSON.stringify({ receivedAt: '2026-09-28T12:00:00.000Z', eventType: '<script>',
-      amount: '5.00', currency: 'USD', subscriptionPayment: true }) });
-    assert.match(nodes['kofi-test-details'].textContent, /<script>.*5\.00 USD; subscription payment/u);
-    assert.match(modderKofiPage, /Do not replace an existing live Ko-fi webhook/u);
+    assert.equal(nodes['kofi-prod-url'].textContent, 'https://renobot.example/prod/kofi/private-id');
+    assert.ok(onReceipt);
+    onReceipt();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(nodes['kofi-webhook-status'].textContent, /New verified delivery recorded/u);
+    assert.match(rendered[0]?.textContent ?? '', /<script>.*5\.00 USD.*No linked Discord account/u);
+    assert.match(rendered[0]?.textContent ?? '', /Transaction tx-1.*Recurring/u);
+    assert.equal(nodes['kofi-entries-status'].textContent, 'Entries shown: 1');
+    assert.ok(loadOlder);
+    loadOlder();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(rendered.length, 2);
+    assert.match(rendered[1]?.textContent ?? '', /Donation.*1\.00 USD/u);
+    assert.equal(nodes['kofi-entries-status'].textContent, 'Entries shown: 2');
+    assert.equal(nodes['kofi-entries-more'].hidden, true);
+    assert.match(modderKofiPage, /Do not replace a working Ko-fi webhook/u);
     assert.doesNotMatch(modderKofiPage, /value="(?:v1:|secret)|webhooks\/kofi/u);
   });
 
-  it('explains why a Ko-fi test URL is missing without exposing a disabled endpoint', async () => {
-    /** @type {[boolean, boolean, RegExp][]} */
-    const cases = [
-      [false, true, /disabled on this deployment.*redeploy/u],
-      [true, false, /Enter your Ko-fi verification token.*save settings/u],
-    ];
-    for (const [enabled, hasToken, expected] of cases) {
+  it('explains why a webhook URL is missing before the verification token is saved', async () => {
       /** @type {Record<string, any>} */
       const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
-        'token-status', 'forward-status', 'test-setup', 'test-setup-status', 'kofi-test',
-        'kofi-test-url', 'kofi-test-status', 'kofi-test-details'].map((id) => [id, { hidden: true }]));
+        'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-webhook-status',
+        'kofi-entries'].map((id) => [id, { hidden: true }]));
       nodes['kofi-form'] = { hidden: true, addEventListener() {} };
       await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
         document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id] },
         fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
           ? { username: 'owner', csrf: 'csrf' }
-          : { minimumAmount: '5.00', currency: 'USD', floor: '5.00', testModeEnabled: enabled,
-            hasVerificationToken: hasToken, hasForwardUrl: false, testUrl: null, lastTestAt: null } }),
+          : { minimumAmount: '5.00', currency: 'USD', floor: '5.00',
+            hasVerificationToken: false, hasForwardUrl: false, prodUrl: null, lastWebhookAt: null } }),
       });
-      assert.equal(nodes['test-setup'].hidden, false);
-      assert.match(nodes['test-setup-status'].textContent, expected);
-      assert.equal(nodes['kofi-test'].hidden, true);
-      assert.equal(nodes['kofi-test-url'].textContent, null);
-    }
+          assert.match(nodes['kofi-webhook-status'].textContent, /Enter your Ko-fi verification token.*save settings/u);
+          assert.equal(nodes['kofi-prod'].hidden, true);
+          assert.equal(nodes['kofi-prod-url'].textContent, null);
   });
 
   it('submits the authenticated settings form without leaving secrets in browser fields', async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
-      'token-status', 'forward-status', 'test-setup', 'test-setup-status',
+      'token-status', 'forward-status',
       'verification-token', 'forward-action', 'forward-url', 'save-settings',
-      'kofi-test', 'kofi-test-url', 'kofi-test-status', 'kofi-test-details']
+      'kofi-prod', 'kofi-prod-url', 'kofi-webhook-status', 'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more']
       .map((id) => [id, { value: '', hidden: true, disabled: false }]));
+    nodes['kofi-entries-list'].replaceChildren = () => {};
+    nodes['kofi-entries-more'].addEventListener = () => {};
     /** @type {((event: { preventDefault: () => void }) => void) | undefined} */
     let submit;
     nodes['kofi-form'] = { hidden: true, addEventListener: (/** @type {string} */ name, /** @type {typeof submit} */ handler) => {
@@ -180,9 +205,9 @@ describe('static portal assets', () => {
     } };
     /** @type {URLSearchParams | undefined} */
     let posted;
-    const settings = { minimumAmount: '5.00', currency: 'USD', floor: '5.00', testModeEnabled: true,
+    const settings = { minimumAmount: '5.00', currency: 'USD', floor: '5.00',
       hasVerificationToken: false, hasForwardUrl: false,
-      testUrl: null };
+      prodUrl: null };
     let streams = 0;
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       document: { body: { dataset: { page: 'modder-kofi' } }, getElementById: (/** @type {string} */ id) => nodes[id] },
@@ -194,13 +219,14 @@ describe('static portal assets', () => {
       fetch: async (/** @type {string} */ path, /** @type {{ method?: string, body?: URLSearchParams }} */ options) => {
         if (path === '/auth/session') return { ok: true, json: async () => ({ csrf: 'csrf-secret' }) };
         if (options.method === 'POST') posted = options.body;
-        return { ok: true, json: async () => ({ ...settings, hasVerificationToken: Boolean(posted),
-          testUrl: posted ? 'https://renobot.example/test/kofi/private-id' : null }) };
+        return { ok: true, json: async () => path.endsWith('/entries') ? { entries: [], nextCursor: null }
+          : ({ ...settings, hasVerificationToken: Boolean(posted),
+            prodUrl: posted ? 'https://renobot.example/prod/kofi/private-id' : null }) };
       },
     });
     assert.ok(submit);
     assert.equal(streams, 0);
-    assert.match(nodes['test-setup-status'].textContent, /Enter your Ko-fi verification token/u);
+    assert.match(nodes['kofi-webhook-status'].textContent, /Enter your Ko-fi verification token/u);
     nodes['verification-token'].value = 'private-value';
     nodes['forward-action'].value = 'replace';
     nodes['forward-url'].value = 'https://example.com/hook';
@@ -213,10 +239,9 @@ describe('static portal assets', () => {
     assert.equal(nodes['forward-url'].value, '');
     assert.equal(nodes['forward-action'].value, 'keep');
     assert.equal(nodes['token-status'].textContent, 'Token configured (value hidden)');
-    assert.equal(nodes['settings-status'].textContent, 'Settings saved. Webhooks remain inactive.');
+    assert.equal(nodes['settings-status'].textContent, 'Settings saved. Supporter roles and forwarding remain inactive.');
     assert.equal(streams, 1);
-    assert.equal(nodes['kofi-test'].hidden, false);
-    assert.match(nodes['test-setup-status'].textContent, /Your test-only URL is below/u);
+    assert.equal(nodes['kofi-prod'].hidden, false);
     submit({ preventDefault() {} });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(streams, 1);

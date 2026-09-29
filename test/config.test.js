@@ -145,7 +145,6 @@ describe('configuration', () => {
       clientSecret: 'client-secret',
       guildId: '23456789012345678',
       host: '127.0.0.1',
-      kofiTestMode: false,
       modderRoleId: '34567890123456789',
       moderatorRoleId: '45678901234567890',
       ownerUserId: '12345678901234567',
@@ -156,8 +155,7 @@ describe('configuration', () => {
   });
 
   it('rejects partial or unsafe dashboard configuration', () => {
-    assert.throws(() => readWebConfig({ KOFI_TEST_MODE: 'true' }), /Dashboard configuration requires/u);
-    assert.throws(() => readWebConfig({ KOFI_TEST_MODE: 'yes' }), /KOFI_TEST_MODE must be true or false/u);
+    assert.equal(readWebConfig({ KOFI_TEST_MODE: 'true' }), undefined);
     assert.throws(() => readWebConfig({ PUBLIC_BASE_URL: 'https://renobot.renodx.com/' }),
       /Dashboard configuration requires/u);
     const base = {
@@ -166,7 +164,7 @@ describe('configuration', () => {
       DISCORD_OWNER_USER_ID: '12345678901234567',
       SESSION_SECRET: '01234567890123456789012345678901',
     };
-    assert.equal(readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/', KOFI_TEST_MODE: 'true' })?.kofiTestMode, true);
+    assert.equal(readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/' })?.publicBaseUrl.href, 'https://example.com/');
     assert.throws(() => readWebConfig({ ...base, PUBLIC_BASE_URL: 'http://example.com/' }),
       /PUBLIC_BASE_URL/u);
     assert.throws(() => readWebConfig({ ...base, PUBLIC_BASE_URL: 'https://example.com/', SESSION_SECRET: 'short' }),

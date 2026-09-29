@@ -72,7 +72,6 @@ Copy `.env.example` to `.env` and configure:
 | `DATABASE_URL` | SQLite file for account persistence and modder Ko-fi settings (`file:/data/renobot.db` on the host volume); migrations must be applied before use. |
 | `KOFI_ENCRYPTION_KEY` | Separate 32-byte base64 AES-GCM key for encrypted settings; never store it in the database. |
 | `SUPPORTER_MINIMUM_AMOUNT` / `SUPPORTER_CURRENCY` | Owner-controlled minimum recurring amount and single supported currency; required with the encryption key to enable modder settings. |
-| `KOFI_TEST_MODE` | Defaults to `false`. Set `true` on owner-controlled HTTPS staging with database and Ko-fi settings to expose verification-and-discard test URLs and modder SSE status; never grants roles or activates payment handling. |
 
 Keep `.env` private. It is excluded from Git.
 

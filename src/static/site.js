@@ -47,33 +47,64 @@ async function loadSession() {
       const form = /** @type {HTMLFormElement} */ (element('kofi-form'));
       /** @type {EventSource | undefined} */
       let events;
-      /** @param {{ minimumAmount: string, currency: string, floor: string, testModeEnabled: boolean,
-       *   hasVerificationToken: boolean, hasForwardUrl: boolean, testUrl: string | null, lastTestAt: string | null }} settings */
+      /** @type {string | null} */
+      let entriesCursor = null;
+      let entriesCount = 0;
+      let entriesVersion = 0;
+      /** @param {boolean} [reset] */
+      async function loadEntries(reset = true) {
+        if (reset) entriesVersion++;
+        const version = entriesVersion;
+        const cursor = reset ? null : entriesCursor;
+        const more = /** @type {HTMLButtonElement} */ (element('kofi-entries-more'));
+        if (!reset) more.disabled = true;
+        const path = `/app/api/modder/kofi/entries${cursor ? `?before=${encodeURIComponent(cursor)}` : ''}`;
+        try {
+          const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+          if (!response.ok) throw new Error('Entries unavailable');
+        /** @type {{ entries: { transactionId: string, eventType: string, amount: string, currency: string,
+         *   supporterDiscordUserId: string | null, tierName: string | null, subscriptionPayment: boolean,
+         *   occurredAt: string, receivedAt: string, outcome: string }[], nextCursor: string | null }} */
+          const { entries, nextCursor } = await response.json();
+          if (version !== entriesVersion) return;
+          const list = element('kofi-entries-list');
+          const items = entries.map((entry) => {
+            const item = document.createElement('li');
+            item.textContent = `Paid ${new Date(entry.occurredAt).toLocaleString()} · Received ${new Date(entry.receivedAt).toLocaleString()} · ${entry.eventType} · ${entry.amount} ${entry.currency} · Transaction ${entry.transactionId} · ${entry.supporterDiscordUserId ?? 'No linked Discord account'} · ${entry.tierName ?? 'No tier'} · ${entry.subscriptionPayment ? 'Recurring' : 'One-time'} · ${entry.outcome}`;
+            return item;
+          });
+          if (reset) { list.replaceChildren(...items); entriesCount = 0; }
+          else list.append(...items);
+          entriesCount += entries.length;
+          entriesCursor = nextCursor;
+          more.hidden = !nextCursor;
+          element('kofi-entries-status').textContent = entriesCount ? `Entries shown: ${entriesCount}` : 'No payment entries yet.';
+        } catch {
+          if (version === entriesVersion) element('kofi-entries-status').textContent = 'Entries are temporarily unavailable. Try again.';
+        } finally { more.disabled = false; }
+      }
+      /** @param {{ minimumAmount: string, currency: string, floor: string,
+       *   hasVerificationToken: boolean, hasForwardUrl: boolean, prodUrl: string | null, lastWebhookAt: string | null }} settings */
       const showSettings = (settings) => {
         /** @type {HTMLInputElement} */ (element('minimum-amount')).value = settings.minimumAmount;
         /** @type {HTMLInputElement} */ (element('currency')).value = settings.currency;
         element('floor-note').textContent = `Minimum allowed: ${settings.floor} ${settings.currency}`;
         element('token-status').textContent = settings.hasVerificationToken ? 'Token configured (value hidden)' : 'Token not yet configured';
         element('forward-status').textContent = settings.hasForwardUrl ? 'Destination configured (value hidden)' : 'No forwarding destination';
-        element('test-setup').hidden = false;
-        element('test-setup-status').textContent = !settings.testModeEnabled
-          ? 'Test deliveries are disabled on this deployment. An administrator must enable Ko-fi test mode and redeploy before a test URL can appear. You can save settings now.'
-          : !settings.hasVerificationToken
-            ? 'Test mode is enabled. Enter your Ko-fi verification token above and save settings to create your test-only URL.'
-            : 'Test mode is enabled. Your test-only URL is below. It is not a production payment webhook.';
-        element('kofi-test').hidden = !settings.testUrl;
-        element('kofi-test-url').textContent = settings.testUrl;
-        element('kofi-test-status').textContent = settings.lastTestAt
-          ? `Last verified delivery: ${new Date(settings.lastTestAt).toLocaleString()}` : 'No verified test delivery yet.';
+        element('kofi-prod').hidden = !settings.prodUrl;
+        element('kofi-prod-url').textContent = settings.prodUrl;
+        element('kofi-webhook-status').textContent = settings.lastWebhookAt
+          ? `Last verified delivery: ${new Date(settings.lastWebhookAt).toLocaleString()}`
+          : settings.hasVerificationToken ? 'No verified deliveries yet.'
+            : 'Enter your Ko-fi verification token above and save settings to create a webhook URL.';
+        element('kofi-entries').hidden = !settings.prodUrl;
+        if (settings.prodUrl) void loadEntries();
         form.hidden = false;
-        if (settings.testUrl && !events) {
+        if (settings.prodUrl && !events) {
           events = new EventSource('/app/api/modder/kofi/events');
-          events.addEventListener('test-delivery', (event) => {
-            try {
-              const result = JSON.parse(/** @type {MessageEvent} */ (event).data);
-              element('kofi-test-status').textContent = `Last verified delivery: ${new Date(result.receivedAt).toLocaleString()}`;
-              element('kofi-test-details').textContent = `Verified test-format delivery: ${result.eventType}, ${result.amount} ${result.currency}; ${result.subscriptionPayment ? 'subscription payment' : 'not a subscription payment'}. Private supporter information is not shown.`;
-            } catch { element('kofi-test-details').textContent = 'A test delivery arrived, but its status could not be displayed.'; }
+          events.addEventListener('receipt', () => {
+            element('kofi-webhook-status').textContent = 'New verified delivery recorded. See entries below.';
+            void loadEntries();
           });
         }
       };
@@ -85,7 +116,8 @@ async function loadSession() {
       if (access.status === 403) { status.textContent = 'Modder access required.'; return; }
       if (!access.ok) { status.textContent = 'Settings are temporarily unavailable.'; return; }
       showSettings(await access.json());
-      status.textContent = 'Settings can be saved, but no webhook or role processing is active.';
+      element('kofi-entries-more').addEventListener('click', () => { void loadEntries(false); });
+      status.textContent = 'Webhook receipts can be recorded; supporter roles and forwarding are inactive.';
       form.addEventListener('submit', (event) => {
         event.preventDefault();
         void (async () => {
@@ -106,7 +138,7 @@ async function loadSession() {
             /** @type {HTMLInputElement} */ (element('verification-token')).value = '';
             /** @type {HTMLInputElement} */ (element('forward-url')).value = '';
             /** @type {HTMLSelectElement} */ (element('forward-action')).value = 'keep';
-            status.textContent = 'Settings saved. Webhooks remain inactive.';
+            status.textContent = 'Settings saved. Supporter roles and forwarding remain inactive.';
           } catch { status.textContent = 'Could not save settings. Please try again.'; }
           finally { button.disabled = false; }
         })();

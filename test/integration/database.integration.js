@@ -5,8 +5,9 @@ import { after, before, describe, it } from 'node:test';
 import { PrismaClient } from '@prisma/client';
 
 import { connectPortalDatabase, createPortalDatabase, MissingVerificationTokenError } from '../../src/database.js';
-import { ingestKofiPayment, verifyKofiTestDelivery } from '../../src/kofi-ingestion.js';
+import { ingestKofiPayment, receiveKofiReceipt } from '../../src/kofi-ingestion.js';
 import { decryptSetting, encryptSetting, integrationSecretOwner } from '../../src/modder-settings.js';
+import { membership } from '../fixtures/kofi-membership.js';
 
 const url = process.env.DATABASE_URL;
 if (!url?.startsWith('file:') || !url.endsWith('/renobot_test.db')) {
@@ -21,6 +22,63 @@ after(async () => { await client.$disconnect(); });
 function discordId() { return `10${randomInt(10000000, 100000000)}${randomInt(10000000, 100000000)}`; }
 
 describe('SQLite migrations and repositories', () => {
+  it('stores verified prod receipts for only their owner without creating supporter work', async () => {
+    const repository = createPortalDatabase(client);
+    const key = Buffer.alloc(32, 7);
+    const owner = { id: discordId(), username: 'receipt-owner' };
+    const other = { id: discordId(), username: 'other-owner' };
+    try {
+      const settings = { minimumAmount: '5.00', currency: 'USD', verificationToken: 'secret',
+        forwardUrlAction: /** @type {const} */ ('keep'), forwardUrl: '' };
+      const integration = await repository.saveIntegration(owner, settings, key);
+      await repository.saveIntegration(other, settings, key);
+      assert.equal(integration.enabled, false);
+      const payload = new URLSearchParams({ data: JSON.stringify({ ...membership, verification_token: 'secret' }) }).toString();
+      assert.deepEqual((await Promise.all(Array.from({ length: 4 }, () =>
+        receiveKofiReceipt(repository, key, integration.endpointId, payload)))).sort(),
+      ['accepted', 'duplicate', 'duplicate', 'duplicate']);
+      assert.equal((await repository.listKofiEntries(owner.id)).entries.length, 1);
+      assert.equal((await repository.listKofiEntries(other.id)).entries.length, 0);
+      const receipt = (await repository.listKofiEntries(owner.id)).entries[0];
+      assert.equal(receipt?.messageId, membership.message_id);
+      assert.equal(receipt?.transactionId, membership.kofi_transaction_id);
+      assert.equal(receipt?.supporterDiscordUserId, membership.discord_userid);
+      assert.equal(receipt?.tierName, 'Bronze');
+      const receivedAt = new Date('2026-09-29T02:00:00Z');
+      await client.kofiEvent.createMany({ data: Array.from({ length: 105 }, (_, index) => ({
+        integrationId: integration.id, messageId: `older-${index}`, transactionId: `transaction-${index}`,
+        eventType: 'Donation', amount: '1.00', currency: 'USD', subscriptionPayment: false,
+        firstSubscriptionPayment: false, occurredAt: receivedAt, receivedAt,
+        outcome: 'recorded-no-entitlement',
+      })) });
+      const first = await repository.listKofiEntries(owner.id);
+      assert.equal(first.entries.length, 50);
+      assert.ok(first.nextCursor);
+      assert.deepEqual(await repository.listKofiEntries(other.id, first.nextCursor), { entries: [], nextCursor: null });
+      const second = await repository.listKofiEntries(owner.id, first.nextCursor);
+      assert.equal(second.entries.length, 50);
+      assert.ok(second.nextCursor);
+      const last = await repository.listKofiEntries(owner.id, second.nextCursor);
+      assert.equal(last.entries.length, 6);
+      assert.equal(last.nextCursor, null);
+      assert.equal(new Set([...first.entries, ...second.entries, ...last.entries].map((entry) => entry.id)).size, 106);
+      const reopened = await connectPortalDatabase(url);
+      assert.ok(reopened);
+      try {
+        assert.equal((await reopened.listKofiEntries(owner.id)).entries.length, 50);
+        assert.equal((await reopened.listKofiEntries(other.id)).entries.length, 0);
+      } finally { await reopened.disconnect(); }
+      assert.doesNotMatch(JSON.stringify(await repository.listKofiEntries(owner.id)), /jo\.example@example\.com|Jo Example|Jo#4105|fixture-token/u);
+      assert.equal(await client.kofiEntitlement.count({ where: { integrationId: integration.id } }), 0);
+      assert.equal(await client.supporterRoleSync.count(), 0);
+      assert.equal(await client.kofiForwardDelivery.count({ where: { event: { integrationId: integration.id } } }), 0);
+    } finally {
+      const users = [owner.id, other.id];
+      await client.kofiEvent.deleteMany({ where: { integration: { account: { discordUserId: { in: users } } } } });
+      await client.kofiIntegration.deleteMany({ where: { account: { discordUserId: { in: users } } } });
+      await client.account.deleteMany({ where: { discordUserId: { in: users } } });
+    }
+  });
   it('records verified retries once per enabled integration without granting roles or retaining personal data', async () => {
     const repository = createPortalDatabase(client);
     const key = Buffer.alloc(32, 7);
@@ -121,10 +179,14 @@ describe('SQLite migrations and repositories', () => {
         message_id: 'tester-message', kofi_transaction_id: 'tester-transaction',
         timestamp: '2026-09-18T01:31:20Z', type: 'Donation', amount: '5.00', currency: 'USD',
       }) }).toString();
-      assert.equal(await verifyKofiTestDelivery(repository, key, first.endpointId, testBody), true);
-      assert.ok((await repository.getIntegration(alpha.id))?.lastTestAt);
-      assert.equal(await client.kofiEvent.count({ where: { integrationId: first.id } }), 0);
-      assert.equal(await repository.recordKofiTest(first.id, 'stale-ciphertext'), false);
+      assert.equal(await receiveKofiReceipt(repository, key, first.endpointId, testBody), 'accepted');
+      assert.ok((await repository.getIntegration(alpha.id))?.lastWebhookAt);
+      assert.equal(await client.kofiEvent.count({ where: { integrationId: first.id } }), 1);
+      assert.equal(await repository.recordKofiReceipt(first.id, 'stale-ciphertext', {
+        verificationToken: 'private-alpha', messageId: 'stale', transactionId: 'stale', eventType: 'Donation',
+        amount: '5.00', currency: 'USD', subscriptionPayment: false, firstSubscriptionPayment: false,
+        occurredAt: new Date(), supporterDiscordUserId: null, tierName: null,
+      }), 'rejected');
       assert.equal((await client.account.findUniqueOrThrow({ where: { discordUserId: alpha.id } })).id, first.accountId);
       assert.equal((await repository.getIntegration(beta.id))?.id, second.id);
       assert.doesNotMatch(JSON.stringify(first), /private-alpha|https:\/\/example\.com\/alpha/u);
@@ -137,16 +199,17 @@ describe('SQLite migrations and repositories', () => {
       assert.equal(updated.verificationTokenCiphertext, first.verificationTokenCiphertext);
       assert.equal(updated.forwardUrlCiphertext, null);
       assert.equal(updated.minimumAmount.toFixed(2), '9.25');
-      assert.ok(updated.lastTestAt);
+      assert.ok(updated.lastWebhookAt);
       assert.equal((await repository.getIntegration(beta.id))?.verificationTokenCiphertext,
         second.verificationTokenCiphertext);
       const replaced = await repository.saveIntegration(alpha, { minimumAmount: '10.00', currency: 'USD',
         verificationToken: 'replacement', forwardUrlAction: 'keep', forwardUrl: '' }, key);
       assert.equal(decryptSetting(replaced.verificationTokenCiphertext, key, integrationSecretOwner(first), 'verification-token'), 'replacement');
       assert.equal(replaced.forwardUrlCiphertext, null);
-      assert.equal(replaced.lastTestAt, null);
-      assert.equal(await verifyKofiTestDelivery(repository, key, first.endpointId, testBody), false);
+      assert.ok(replaced.lastWebhookAt);
+      assert.equal(await receiveKofiReceipt(repository, key, first.endpointId, testBody), 'rejected');
     } finally {
+      await client.kofiEvent.deleteMany({ where: { integration: { account: { discordUserId: { in: users.map((u) => u.id) } } } } });
       await client.kofiIntegration.deleteMany({ where: { account: { discordUserId: { in: users.map((u) => u.id) } } } });
       await client.account.deleteMany({ where: { discordUserId: { in: users.map((u) => u.id) } } });
     }

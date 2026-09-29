@@ -10,10 +10,11 @@ export class MissingVerificationTokenError extends Error {}
  * @typedef {Readonly<{
  *   saveLogin: (user: { id: string, username: string }) => Promise<void>,
  *   getIntegration: (discordUserId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
- *   findTestIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
- *   recordKofiTest: (integrationId: string, tokenCiphertext: string) => Promise<boolean>,
+ *   findIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   findEnabledIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   recordKofiPayment: (integrationId: string, tokenCiphertext: string, payment: import('./kofi-ingestion.js').KofiPayment) => Promise<'rejected' | 'accepted' | 'duplicate'>,
+ *   recordKofiReceipt: (integrationId: string, tokenCiphertext: string, payment: import('./kofi-ingestion.js').KofiPayment) => Promise<'rejected' | 'accepted' | 'duplicate'>,
+ *   listKofiEntries: (discordUserId: string, before?: string) => Promise<{ entries: import('@prisma/client').KofiEvent[], nextCursor: string | null }>,
  *   saveIntegration: (user: { id: string, username: string }, settings: IntegrationSettings, key: Buffer) => Promise<import('@prisma/client').KofiIntegration>,
  *   isReady: () => Promise<boolean>,
  *   disconnect: () => Promise<void>,
@@ -51,18 +52,46 @@ export function createPortalDatabase(client) {
     async getIntegration(discordUserId) {
       return client.kofiIntegration.findFirst({ where: { account: { discordUserId } } });
     },
-    async findTestIntegrationByEndpoint(endpointId) {
+    async findIntegrationByEndpoint(endpointId) {
       return client.kofiIntegration.findUnique({ where: { endpointId } });
-    },
-    async recordKofiTest(integrationId, tokenCiphertext) {
-      const result = await client.kofiIntegration.updateMany({
-        where: { id: integrationId, verificationTokenCiphertext: tokenCiphertext },
-        data: { lastTestAt: new Date() },
-      });
-      return result.count === 1;
     },
     async findEnabledIntegrationByEndpoint(endpointId) {
       return client.kofiIntegration.findFirst({ where: { endpointId, enabled: true } });
+    },
+    async listKofiEntries(discordUserId, before) {
+      const owner = { integration: { account: { discordUserId } } };
+      const cursor = before ? await client.kofiEvent.findFirst({ where: { ...owner, id: before },
+        select: { id: true, receivedAt: true } }) : null;
+      if (before && !cursor) return { entries: [], nextCursor: null };
+      const rows = await client.kofiEvent.findMany({ where: { ...owner,
+        ...(cursor ? { OR: [ { receivedAt: { lt: cursor.receivedAt } },
+          { receivedAt: cursor.receivedAt, id: { lt: cursor.id } } ] } : {}) },
+        orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }], take: 51 });
+      const entries = rows.slice(0, 50);
+      return { entries, nextCursor: rows.length > 50 ? entries.at(-1)?.id ?? null : null };
+    },
+    async recordKofiReceipt(integrationId, tokenCiphertext, payment) {
+      return client.$transaction(async (tx) => {
+        const current = await tx.kofiIntegration.updateMany({
+          where: { id: integrationId, verificationTokenCiphertext: tokenCiphertext },
+          data: { lastWebhookAt: new Date() },
+        });
+        if (current.count !== 1) return 'rejected';
+        try {
+          await tx.kofiEvent.create({ data: { integrationId,
+            messageId: payment.messageId, transactionId: payment.transactionId,
+            eventType: payment.eventType, amount: payment.amount, currency: payment.currency,
+            subscriptionPayment: payment.subscriptionPayment,
+            firstSubscriptionPayment: payment.firstSubscriptionPayment,
+            occurredAt: payment.occurredAt, supporterDiscordUserId: payment.supporterDiscordUserId,
+            tierName: payment.tierName, outcome: 'recorded-no-entitlement',
+          } });
+          return 'accepted';
+        } catch (error) {
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'P2002') return 'duplicate';
+          throw error;
+        }
+      });
     },
     async recordKofiPayment(integrationId, tokenCiphertext, payment) {
       return client.$transaction(async (tx) => {
@@ -110,7 +139,7 @@ export function createPortalDatabase(client) {
             minimumAmount: settings.minimumAmount, currency: settings.currency,
             forwardUrlCiphertext: forwardUrlCiphertext ?? null },
           update: { minimumAmount: settings.minimumAmount, currency: settings.currency,
-            ...(tokenCiphertext ? { verificationTokenCiphertext: tokenCiphertext, lastTestAt: null } : {}),
+            ...(tokenCiphertext ? { verificationTokenCiphertext: tokenCiphertext } : {}),
             ...(forwardUrlCiphertext !== undefined ? { forwardUrlCiphertext } : {}) },
         });
       });
