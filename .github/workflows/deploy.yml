@@ -109,10 +109,15 @@ jobs:
         env:
           IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
           KOFI_TEST_MODE: ${{ vars.KOFI_TEST_MODE }}
+          KOFI_ENCRYPTION_KEY: ${{ secrets.KOFI_ENCRYPTION_KEY }}
         run: |
           mode=${KOFI_TEST_MODE:-false}
           if [[ "$mode" != true && "$mode" != false ]]; then
             echo 'KOFI_TEST_MODE must be true or false.' >&2
             exit 2
           fi
-          ssh production /opt/renobot/deploy.sh "$IMAGE" "$mode"
+          if [[ -z "$KOFI_ENCRYPTION_KEY" ]]; then
+            echo 'The production KOFI_ENCRYPTION_KEY environment secret is required.' >&2
+            exit 2
+          fi
+          printf '%s\n' "$KOFI_ENCRYPTION_KEY" | ssh production /opt/renobot/deploy.sh "$IMAGE" "$mode"

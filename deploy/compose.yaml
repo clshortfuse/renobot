@@ -10,6 +10,7 @@ services:
       HTTP_PORT: 3000
       NODE_ENV: production
       KOFI_TEST_MODE: ${KOFI_TEST_MODE:-false}
+      KOFI_ENCRYPTION_KEY: ${KOFI_ENCRYPTION_KEY:-}
     ports:
       - 127.0.0.1:3000:3000
     volumes:
