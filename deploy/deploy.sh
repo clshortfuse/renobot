@@ -12,7 +12,6 @@ new_image=$1
 test_mode=${2:-false}
 unset KOFI_TEST_MODE
 unset KOFI_ENCRYPTION_KEY
-umask 077
 if ! IFS= read -r kofi_key || [[ -z "$kofi_key" ]]; then
   echo 'A Ko-fi encryption key must be supplied on stdin.' >&2
   exit 2
@@ -29,8 +28,12 @@ if [[ -z "$previous_key" ]]; then
   previous_key=$(sed -n 's/^KOFI_ENCRYPTION_KEY=//p' /etc/renobot/renobot.env 2>/dev/null || true)
 fi
 if [[ "$previous_test_mode" != true ]]; then previous_test_mode=false; fi
-printf 'RENOBOT_IMAGE=%s\nKOFI_TEST_MODE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
-  "$new_image" "$test_mode" "$kofi_key" > .deploy.env.next
+(
+  umask 077
+  printf 'RENOBOT_IMAGE=%s\nKOFI_TEST_MODE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
+    "$new_image" "$test_mode" "$kofi_key" > .deploy.env.next
+  chmod 600 .deploy.env.next
+)
 docker compose --env-file .deploy.env.next -f compose.yaml pull app
 
 # The mount must exist before either Compose run or up. Only initialize an
@@ -109,8 +112,12 @@ fi
 
 rm -f /opt/renobot/public.next
 if [[ -n "$previous_image" ]]; then
-  printf 'RENOBOT_IMAGE=%s\nKOFI_TEST_MODE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
-    "$previous_image" "$previous_test_mode" "$previous_key" > .deploy.env
+  (
+    umask 077
+    printf 'RENOBOT_IMAGE=%s\nKOFI_TEST_MODE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
+      "$previous_image" "$previous_test_mode" "$previous_key" > .deploy.env
+    chmod 600 .deploy.env
+  )
   docker compose --env-file .deploy.env -f compose.yaml up -d --no-deps --wait app
 fi
 exit 1
