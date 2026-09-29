@@ -67,13 +67,18 @@ async function loadSupporterAccount(csrf) {
   let cursor = null;
   /** @type {Record<string, string>[]} */
   let payments = [];
+  let version = 0;
   /** @param {boolean} reset */
   async function load(reset) {
+    if (reset) version++;
+    const current = version;
     const response = await fetch(`/app/api/account${reset || !cursor ? '' : `?before=${encodeURIComponent(cursor)}`}`,
       { credentials: 'same-origin', cache: 'no-store' });
+    if (current !== version) return;
     if (!response.ok) throw new Error('Account unavailable');
     /** @type {{ emails: {email: string, verifiedBy: string}[], earlyAccess: { enabled: boolean, expiresAt: string | null, creditedMonths: number, roleManaged: boolean }, entries: {recipient: string, amount: string, currency: string, receivedAt: string, eventType: string, transactionId: string, outcome: string}[], nextCursor: string | null }} */
     const result = await response.json();
+    if (current !== version) return;
     (/** @type {HTMLElement & {patch: (state: object) => void}} */ (element('account-emails'))).patch({
       emails: result.emails.map((email) => ({ ...email, label: email.verifiedBy === 'discord' ? 'Verified with Discord' : 'Verified email' })),
     });

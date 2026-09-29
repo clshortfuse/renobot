@@ -6,6 +6,47 @@ import { describe, it } from 'node:test';
 import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, materialJs, modderKofiPage, notFoundPage, siteCss, siteJs } from '../src/web-assets.js';
 
 describe('static portal assets', () => {
+  it('ignores an older payment page after matching refreshes the account', async () => {
+    /** @type {Record<string, any>} */
+    const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
+      'account-emails', 'account-early-access', 'account-payments', 'account-payments-status'].map((id) => [id,
+      { hidden: true, disabled: true, state: {}, listeners: {},
+        addEventListener(/** @type {string} */ type, /** @type {Function} */ callback) { this.listeners[type] = callback; },
+        patch(/** @type {object} */ state) { Object.assign(this.state, state); } }]));
+    /** @type {((value: any) => void) | undefined} */
+    let finishOlder;
+    const older = new Promise((resolve) => { finishOlder = resolve; });
+    /** @param {string} transaction @param {string | null} cursor */
+    const account = (transaction, cursor) => ({ ok: true, json: async () => ({
+      emails: [{ email: 'verified@example.test', verifiedBy: 'discord' }],
+      earlyAccess: { enabled: false, expiresAt: null, creditedMonths: 0, roleManaged: false },
+      entries: [{ recipient: 'Modder', amount: '5.00', currency: 'USD', receivedAt: '2026-09-29T00:00:00Z',
+        eventType: 'Donation', transactionId: transaction, outcome: 'recorded' }], nextCursor: cursor,
+    }) });
+    let firstPage = 0;
+    /** @type {string[]} */
+    const calls = [];
+    await runInNewContext(siteJs.replace('void loadSession();', "loadSupporterAccount('csrf-value');"), {
+      document: { getElementById: (/** @type {string} */ id) => nodes[id] }, URLSearchParams,
+      fetch: async (/** @type {string} */ path) => {
+        calls.push(path);
+        if (path.includes('?before=initial')) return older;
+        if (path.endsWith('/link-payments')) return { ok: true, json: async () => ({ linked: 1, more: false }) };
+        return account(++firstPage === 1 ? 'initial' : 'refreshed', firstPage === 1 ? 'initial' : 'fresh');
+      },
+    });
+    nodes['account-payments-more'].disabled = false;
+    nodes['account-payments-more'].listeners.click();
+    nodes['account-check-payments'].listeners.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(nodes['account-payments'].state.items[0].transaction, 'refreshed');
+    finishOlder?.(account('stale', 'stale-cursor'));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(Array.from(nodes['account-payments'].state.items, (/** @type {any} */ item) => item.transaction), ['refreshed']);
+    nodes['account-payments-more'].listeners.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.at(-1), '/app/api/account?before=fresh');
+  });
   it('shows multiple verified addresses and personal payments without a privileged role', async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
