@@ -47,11 +47,21 @@ automatic import of data from a PostgreSQL database; export and migrate any
 existing records deliberately before switching a populated deployment.
 
 To enable **inactive Ko-fi settings** (not payment processing), configure
-`DATABASE_URL`, `DISCORD_MODDER_ROLE_ID`, `KOFI_ENCRYPTION_KEY` (a dedicated
-base64-encoded 32-byte key), `SUPPORTER_MINIMUM_AMOUNT`, and
-`SUPPORTER_CURRENCY` together in the private environment file. Losing or
-changing the key makes existing ciphertext unreadable; back it up separately
-from the database and plan key rotation before changing it. `v1:` ciphertext
+`DATABASE_URL`, `DISCORD_MODDER_ROLE_ID`, `SUPPORTER_MINIMUM_AMOUNT`, and
+`SUPPORTER_CURRENCY` in the private host environment file, and a dedicated
+base64-encoded 32-byte `KOFI_ENCRYPTION_KEY` in the GitHub `production`
+environment secrets. Deployment sends the key over pinned SSH stdin and stores
+it in the private `/opt/renobot/.deploy.env` (mode `0600`), which overrides any
+legacy key in the host runtime file for the app and migrations. Do not place
+the key in Git, workflow inputs, command arguments, or build artifacts. For a
+replacement host, restore the SQLite database and other private host settings
+separately; the same GitHub environment secret provisions the original key on
+deployment. GitHub does not reveal an existing secret value after it is saved.
+Losing or changing the key makes existing ciphertext unreadable. Deployments
+reject a different key when the SQLite database has saved Ko-fi integrations;
+plan key rotation and re-encryption before changing a populated installation.
+Remove stale keys from legacy host configuration separately after confirming
+the new deployment is healthy. `v1:` ciphertext
 authenticates its owning account, integration ID, and secret field;
 copies between owners or fields fail decryption. Do not rotate the key without
 a deliberate re-encryption plan; there is no automatic fallback or old-key
@@ -178,6 +188,14 @@ it, passes only that literal value over SSH, and stores it in the private
 deployment Compose environment file (not in Git). Compose explicitly overrides
 any `KOFI_TEST_MODE` entry in the host runtime env file. Deployment rollback
 restores the prior setting. This does not configure a separate staging host.
+
+Required **environment secret**: `KOFI_ENCRYPTION_KEY`. Generate a fresh
+base64-encoded 32-byte key outside chat, save it as an environment secret, and
+deploy only after that secret is configured. The workflow refuses to deploy
+without it. If replacing an earlier host-only key, confirm the database has no
+saved Ko-fi integrations first; a different key is rejected when it does.
+Keep the host-only database path, role ID, minimum amount, and currency set in
+`/etc/renobot/renobot.env`; this workflow does not provision those values.
 
 Do not use an unverified `ssh-keyscan` result inside the workflow. Obtain and
 verify the host key through the provider console or another trusted channel.
