@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { addCalendarMonths, newlyEarnedMonths, testSupporterDiscordUserId } from './early-access.js';
 import { encryptSetting, integrationSecretOwner } from './modder-settings.js';
 import { normalizeEmail } from './account-email.js';
+import { historicalExchangeRate } from './exchange-rate.js';
 
 /** @typedef {Readonly<{ minimumAmount: string, currency: string, verificationToken: string,
  *   forwardUrlAction: 'keep' | 'replace' | 'clear', forwardUrl: string }>} IntegrationSettings */
@@ -37,7 +38,7 @@ export class MissingVerificationTokenError extends Error {}
  *   backfillEarlyAccess: (currency: string, after?: string) => Promise<{ scanned: number, nextCursor: string | null } | null>,
  *   approveEarlyAccess: (discordUserId: string, now: Date) => Promise<boolean>,
  *   creditAccountPayments: (discordUserId: string, currency: string) => Promise<{ credited: number }>,
- *   listEarlyAccessReview: (roleId: string | undefined, before?: string) => Promise<{ members: { discordUserId: string, unlinkedPayments?: number, uncreditedPayments?: number, totalAmount: import('@prisma/client').Prisma.Decimal, creditedMonths: number, expiresAt: Date | null, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
+ *   listEarlyAccessReview: (roleId: string | undefined, before?: string, currency?: string) => Promise<{ members: { discordUserId: string, unlinkedPayments?: number, uncreditedPayments?: number, totalAmount: import('@prisma/client').Prisma.Decimal, creditedMonths: number, expiresAt: Date | null, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
  *   getEarlyAccessReview: (discordUserId: string, before?: string) => Promise<{ periods: import('@prisma/client').EarlyAccessPeriod[], contributions: { eventId: string, amount: import('@prisma/client').Prisma.Decimal, currency: string, eventType: string, receivedAt: Date, modderDiscordUserId: string, modderUsername: string }[], nextCursor: string | null } | null>,
  *   saveIntegration: (user: { id: string, username: string }, settings: IntegrationSettings, key: Buffer) => Promise<import('@prisma/client').KofiIntegration>,
  *   isReady: () => Promise<boolean>,
@@ -67,8 +68,9 @@ export async function connectPortalDatabase(url) {
  * @param {import('@prisma/client').KofiEvent} event
  * @param {Date} receivedAt
  * @param {boolean} [queueRole]
+ * @param {{ convertedAmount: import('@prisma/client').Prisma.Decimal, targetCurrency: string, exchangeRate: string, rateDate: string }} [conversion]
  */
-async function creditEarlyAccess(tx, event, receivedAt, queueRole = true) {
+async function creditEarlyAccess(tx, event, receivedAt, queueRole = true, conversion) {
   const discordUserId = /** @type {string} */ (event.supporterDiscordUserId);
   if (discordUserId === testSupporterDiscordUserId) return;
   if (await tx.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) return;
@@ -77,7 +79,7 @@ async function creditEarlyAccess(tx, event, receivedAt, queueRole = true) {
   select: { eventId: true } });
   if (newerCredit) {
     const previous = await tx.earlyAccessBalance.findUnique({ where: { discordUserId }, select: { creditedMonths: true } });
-    await tx.earlyAccessCredit.create({ data: { eventId: event.id, discordUserId, creditedAt: receivedAt } });
+    await tx.earlyAccessCredit.create({ data: { eventId: event.id, discordUserId, creditedAt: receivedAt, ...conversion } });
     const creditedMonths = await rebuildEarlyAccessPeriods(tx, discordUserId);
     if (queueRole && creditedMonths > (previous?.creditedMonths ?? 0)) {
       await tx.earlyAccessRoleSync.upsert({ where: { discordUserId }, create: { discordUserId, nextAttemptAt: receivedAt },
@@ -86,7 +88,7 @@ async function creditEarlyAccess(tx, event, receivedAt, queueRole = true) {
     return;
   }
   const balance = await tx.earlyAccessBalance.findUnique({ where: { discordUserId } });
-  const totalAmount = new Prisma.Decimal(balance?.totalAmount ?? 0).plus(event.amount);
+  const totalAmount = new Prisma.Decimal(balance?.totalAmount ?? 0).plus(conversion?.convertedAmount ?? event.amount);
   const start = balance?.expiresAt && balance.expiresAt > receivedAt ? balance.expiresAt : receivedAt;
   const months = newlyEarnedMonths(totalAmount, balance?.creditedMonths ?? 0, start);
   const expiresAt = months ? addCalendarMonths(start, months) : balance?.expiresAt ?? null;
@@ -105,7 +107,7 @@ async function creditEarlyAccess(tx, event, receivedAt, queueRole = true) {
     if (queueRole) await tx.earlyAccessRoleSync.upsert({ where: { discordUserId }, create: { discordUserId, nextAttemptAt: receivedAt },
       update: { nextAttemptAt: receivedAt, attemptCount: 0, lastErrorCode: null } });
   }
-  await tx.earlyAccessCredit.create({ data: { eventId: event.id, discordUserId, creditedAt: receivedAt } });
+  await tx.earlyAccessCredit.create({ data: { eventId: event.id, discordUserId, creditedAt: receivedAt, ...conversion } });
 }
 
 /**
@@ -125,7 +127,7 @@ async function rebuildEarlyAccessPeriods(tx, discordUserId) {
   /** @type {{ discordUserId: string, startedAt: Date, expiresAt: Date, months: number }[]} */
   const periods = [];
   for (const credit of credits) {
-    const amount = amounts.get(credit.eventId);
+    const amount = credit.convertedAmount ?? amounts.get(credit.eventId);
     if (!amount) throw new Error('Missing credited Ko-fi event');
     totalAmount = totalAmount.plus(amount);
     const active = Boolean(expiresAt && expiresAt > credit.creditedAt);
@@ -147,7 +149,7 @@ async function rebuildEarlyAccessPeriods(tx, discordUserId) {
 }
 
 /** @param {import('@prisma/client').PrismaClient} client @returns {PortalDatabase} */
-export function createPortalDatabase(client) {
+export function createPortalDatabase(client, exchangeRate = historicalExchangeRate) {
   return {
     async saveLogin({ id, username }) {
       const now = new Date();
@@ -376,27 +378,45 @@ export function createPortalDatabase(client) {
     },
     async creditAccountPayments(discordUserId, currency) {
       if (discordUserId === testSupporterDiscordUserId) return { credited: 0 };
+      const candidates = await client.kofiEvent.findMany({ where: { supporterDiscordUserId: discordUserId,
+        eventType: { in: ['Donation', 'Subscription'] } }, orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }] });
+      const conversions = new Map();
+      const rates = new Map();
+      for (const event of candidates) {
+        if (event.occurredAt.getTime() > event.receivedAt.getTime() + 5 * 60_000
+          || await client.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) continue;
+        const key = `${event.currency}:${event.occurredAt.toISOString().slice(0, 10)}`;
+        if (!rates.has(key)) rates.set(key, await exchangeRate(event.currency, currency, event.occurredAt));
+        const rate = rates.get(key);
+        conversions.set(event.id, { convertedAmount: event.amount.mul(rate.rate), targetCurrency: currency,
+          exchangeRate: rate.rate, rateDate: rate.date });
+      }
       return client.$transaction(async (tx) => {
-        const events = await tx.kofiEvent.findMany({ where: { supporterDiscordUserId: discordUserId, currency,
+        const events = await tx.kofiEvent.findMany({ where: { supporterDiscordUserId: discordUserId,
           eventType: { in: ['Donation', 'Subscription'] } }, orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }] });
         let credited = 0;
         for (const event of events) {
           if (event.occurredAt > new Date(event.receivedAt.getTime() + 5 * 60_000)
             || await tx.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) continue;
-          await creditEarlyAccess(tx, event, event.receivedAt, false);
+          const conversion = conversions.get(event.id);
+          if (!conversion) continue;
+          await creditEarlyAccess(tx, event, event.receivedAt, false, conversion);
           if (await tx.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) credited++;
         }
         return { credited };
       }, { timeout: 30_000 });
     },
     async listEarlyAccessReview(roleId, before) {
-      const [balances, accounts] = await Promise.all([
+      const [balances, accounts, assigned] = await Promise.all([
         client.earlyAccessBalance.findMany(),
         client.account.findMany({ where: { emails: { some: {} } }, include: { emails: true } }),
+        client.kofiEvent.findMany({ where: { supporterDiscordUserId: { not: null },
+          eventType: { in: ['Donation', 'Subscription'] } }, select: { supporterDiscordUserId: true }, distinct: ['supporterDiscordUserId'] }),
       ]);
       const byAccount = new Map(accounts.map((account) => [account.discordUserId, account]));
       const byBalance = new Map(balances.map((balance) => [balance.discordUserId, balance]));
-      const idsToReview = [...new Set([...byAccount.keys(), ...byBalance.keys()])]
+      const idsToReview = [...new Set([...byAccount.keys(), ...byBalance.keys(),
+        ...assigned.flatMap((event) => event.supporterDiscordUserId ? [event.supporterDiscordUserId] : [])])]
         .filter((id) => id !== testSupporterDiscordUserId && (!before || id > before)).sort().slice(0, 51);
       const rows = idsToReview.map((discordUserId) => byBalance.get(discordUserId) ?? {
         discordUserId, totalAmount: new Prisma.Decimal(0), creditedMonths: 0, expiresAt: null,
@@ -416,8 +436,9 @@ export function createPortalDatabase(client) {
         const emails = byAccount.get(id)?.emails.map((email) => email.email) ?? [];
         const unlinkedPayments = emails.length ? await client.kofiEvent.count({ where: {
           supporterDiscordUserId: null, supporterEmail: { in: emails } } }) : 0;
-        const receipts = await client.kofiEvent.findMany({ where: { supporterDiscordUserId: id,
-          eventType: { in: ['Donation', 'Subscription'] } }, select: { id: true } });
+        const candidates = await client.kofiEvent.findMany({ where: { supporterDiscordUserId: id,
+          eventType: { in: ['Donation', 'Subscription'] } }, select: { id: true, occurredAt: true, receivedAt: true } });
+        const receipts = candidates.filter((event) => event.occurredAt.getTime() <= event.receivedAt.getTime() + 5 * 60_000);
         const credited = await client.earlyAccessCredit.count({ where: { eventId: { in: receipts.map((receipt) => receipt.id) } } });
         pending.set(id, { unlinkedPayments, uncreditedPayments: receipts.length - credited });
       }
@@ -430,9 +451,9 @@ export function createPortalDatabase(client) {
     async getEarlyAccessReview(discordUserId, before) {
       if (discordUserId === testSupporterDiscordUserId) return null;
       const account = await client.account.findUnique({ where: { discordUserId }, include: { emails: true } });
-      if (account?.emails.length) {
+      if (account?.emails.length || await client.kofiEvent.count({ where: { supporterDiscordUserId: discordUserId } })) {
         const owner = { OR: [{ supporterDiscordUserId: discordUserId },
-          { supporterDiscordUserId: null, supporterEmail: { in: account.emails.map((email) => email.email) } }] };
+          { supporterDiscordUserId: null, supporterEmail: { in: account?.emails.map((email) => email.email) ?? [] } }] };
         const cursor = before ? await client.kofiEvent.findFirst({ where: { ...owner, id: before } }) : null;
         if (before && !cursor) return { periods: [], contributions: [], nextCursor: null };
         const rows = await client.kofiEvent.findMany({ where: { AND: [owner,

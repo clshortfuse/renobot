@@ -24,8 +24,44 @@ after(async () => { await client.$disconnect(); });
 function discordId() { return `10${randomInt(10000000, 100000000)}${randomInt(10000000, 100000000)}`; }
 
 describe('SQLite migrations and repositories', () => {
+  it('reviews assigned email-less supporters and converts five small donations cumulatively', async () => {
+    const database = createPortalDatabase(client, async () => ({ rate: '1.2', date: '2026-09-01' }));
+    const owner = { id: discordId(), username: 'conversion-modder' };
+    const supporter = discordId();
+    const integration = await database.saveIntegration(owner, { minimumAmount: '5.00', currency: 'USD',
+      verificationToken: 'secret', forwardUrlAction: 'keep', forwardUrl: '' }, Buffer.alloc(32, 7));
+    try {
+      for (let index = 0; index < 5; index++) {
+        await client.kofiEvent.create({ data: { integrationId: integration.id, messageId: randomUUID(),
+          transactionId: randomUUID(), eventType: 'Donation', amount: '1.00', currency: 'EUR',
+          subscriptionPayment: false, firstSubscriptionPayment: false, supporterDiscordUserId: supporter,
+          receivedAt: new Date('2026-09-01T12:00:00Z'), occurredAt: new Date('2026-09-01T12:00:00Z'),
+          outcome: 'recorded-no-entitlement' } });
+      }
+      const member = (await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter);
+      assert.equal(member?.uncreditedPayments, 5);
+      assert.equal((await database.getEarlyAccessReview(supporter))?.contributions.length, 5);
+      assert.deepEqual(await database.creditAccountPayments(supporter, 'USD'), { credited: 5 });
+      assert.deepEqual(await database.creditAccountPayments(supporter, 'USD'), { credited: 0 });
+      const balance = await client.earlyAccessBalance.findUniqueOrThrow({ where: { discordUserId: supporter } });
+      assert.equal(balance.totalAmount.toFixed(2), '6.00');
+      assert.equal(balance.creditedMonths, 1);
+      const credits = await client.earlyAccessCredit.findMany({ where: { discordUserId: supporter } });
+      assert.equal(credits.length, 5);
+      assert.equal(credits[0]?.convertedAmount?.toFixed(2), '1.20');
+      assert.equal(credits[0]?.targetCurrency, 'USD');
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter } }), 0);
+    } finally {
+      await client.earlyAccessCredit.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessPeriod.deleteMany({ where: { discordUserId: supporter } });
+      await client.earlyAccessBalance.deleteMany({ where: { discordUserId: supporter } });
+      await client.kofiEvent.deleteMany({ where: { integrationId: integration.id } });
+      await client.kofiIntegration.delete({ where: { id: integration.id } });
+      await client.account.delete({ where: { discordUserId: owner.id } });
+    }
+  });
   it('links historical subscription receipts without granting access or queueing roles', async () => {
-    const database = createPortalDatabase(client);
+    const database = createPortalDatabase(client, async () => ({ rate: '1', date: '2026-09-01' }));
     const owner = { id: discordId(), username: 'subscription-modder' };
     const supporter = { id: discordId(), username: 'subscription-supporter' };
     const email = `${randomUUID()}@example.test`;
@@ -75,8 +111,17 @@ describe('SQLite migrations and repositories', () => {
       }
       assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 0, more: false });
       assert.equal((await database.supporterAccount(supporter.id)).entries.length, 2);
-      assert.equal((await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter.id)?.uncreditedPayments, 2);
-      assert.deepEqual(await database.creditAccountPayments(supporter.id, 'USD'), { credited: 2 });
+      const receipt = await client.kofiEvent.findFirstOrThrow({ where: { integrationId: integration.id } });
+      for (const currency of ['EUR', 'USD']) {
+        await client.kofiEvent.create({ data: { integrationId: integration.id, messageId: randomUUID(),
+          transactionId: randomUUID(), eventType: 'Donation', amount: '5.00', currency,
+          subscriptionPayment: false, firstSubscriptionPayment: false, supporterDiscordUserId: supporter.id,
+          receivedAt: receipt.receivedAt, occurredAt: currency === 'USD'
+            ? new Date(receipt.receivedAt.getTime() + 6 * 60_000) : receipt.receivedAt,
+          outcome: 'recorded-no-entitlement' } });
+      }
+      assert.equal((await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter.id)?.uncreditedPayments, 3);
+      assert.deepEqual(await database.creditAccountPayments(supporter.id, 'USD'), { credited: 3 });
       assert.deepEqual(await database.creditAccountPayments(supporter.id, 'USD'), { credited: 0 });
       assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
       assert.equal((await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter.id)?.uncreditedPayments, 0);
@@ -220,7 +265,7 @@ describe('SQLite migrations and repositories', () => {
       assert.equal(reviewed?.totalAmount.toFixed(2), '20.00');
       const provenance = await database.getEarlyAccessReview(supporter);
       assert.equal(provenance?.periods.length, 2);
-      assert.equal(provenance?.contributions.length, 3);
+      assert.equal(provenance?.contributions.length, 5);
       assert.deepEqual(new Set(provenance?.contributions.map((item) => item.modderDiscordUserId)),
         new Set(owners.map((owner) => owner.id)));
       assert.equal(await database.getEarlyAccessReview(discordId()), null);
@@ -702,7 +747,7 @@ describe('SQLite migrations and repositories', () => {
     assert.deepEqual(new Set(/** @type {{migration_name: string}[]} */ (rows).map((row) => row.migration_name)),
       new Set(['20260928000000_sqlite_portal', '20260929000000_managed_supporter_role',
         '20260929010000_kofi_delivery_source', '20260929020000_early_access_periods',
-        '20260929030000_verified_account_emails']));
+        '20260929030000_verified_account_emails', '20260929040000_credit_currency_conversion']));
     const id = discordId();
     const database = await connectPortalDatabase(url);
     assert.ok(database);

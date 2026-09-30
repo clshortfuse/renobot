@@ -138,6 +138,10 @@ model EarlyAccessCredit {
   eventId       String   @id @map("event_id")
   discordUserId String   @map("discord_user_id")
   creditedAt    DateTime @map("credited_at")
+  convertedAmount Decimal? @map("converted_amount")
+  targetCurrency String? @map("target_currency")
+  exchangeRate Decimal? @map("exchange_rate")
+  rateDate String? @map("rate_date")
 
   @@index([discordUserId, creditedAt, eventId], map: "early_access_credit_discord_user_id_credited_at_event_id_idx")
   @@map("early_access_credit")
