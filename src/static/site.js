@@ -225,7 +225,7 @@ async function loadSession() {
           if (current !== version) return;
           result.members.sort((a, b) => Number(Boolean(b.unlinkedPayments || b.uncreditedPayments || b.active && b.roleStatus === 'missing'))
             - Number(Boolean(a.unlinkedPayments || a.uncreditedPayments || a.active && a.roleStatus === 'missing')));
-          const items = result.members.map((member) => {
+          const items = result.members.filter((member) => member.roleStatus !== 'present').map((member) => {
             const row = document.createElement('mdw-grid');
             row.setAttribute('role', 'listitem');
             row.setAttribute('padding', '12');
@@ -236,7 +236,7 @@ async function loadSession() {
             const labels = { present: 'Has role', missing: 'Missing role', 'not-in-server': 'Not in server', unavailable: 'Could not check', disabled: 'Role not configured' };
             let column = 0;
             for (const text of [member.discordName ?? member.discordUserId,
-              `${member.totalAmount} ${member.currency}`, member.expiresAt
+              Number(member.totalAmount) ? `${member.totalAmount} ${member.currency}` : 'Not credited', member.expiresAt
                 ? `${new Date(member.expiresAt).toLocaleDateString()}${member.active ? '' : ' · Expired'}` : 'No active access',
               labels[/** @type {keyof typeof labels} */ (member.roleStatus)] ?? 'Could not check']) {
               const cell = document.createElement('mdw-box');
@@ -353,11 +353,10 @@ async function loadSession() {
           cursor = result.nextCursor;
           more.hidden = !cursor;
           content.hidden = false;
-          const missing = result.members.filter((member) => member.active && member.roleStatus === 'missing').length;
           const unavailable = result.members.filter((member) => !member.roleStatus || member.roleStatus === 'unavailable').length;
           const paymentAttention = result.members.filter((member) => member.unlinkedPayments || member.uncreditedPayments).length;
           status.textContent = !result.enabled ? 'Configure the Early Access role before granting access.'
-            : `${missing ? `${missing} eligible supporter${missing === 1 ? '' : 's'} missing the role.` : unavailable ? 'No missing roles confirmed; some role checks are unavailable.' : 'No eligible supporters missing the role on this page.'}${paymentAttention ? ` ${paymentAttention} account${paymentAttention === 1 ? '' : 's'} with payments needing linking or credit review.` : ''}${unavailable ? ` ${unavailable} could not be checked; try again.` : ''}${result.nextCursor ? ' Load more people to check the rest.' : ''}`;
+            : `Showing paying supporters without the role; people who already have it are hidden.${paymentAttention ? ' Some payments still need linking or credit review.' : ''}${unavailable ? ` ${unavailable} role checks unavailable in this batch.` : ''}${result.nextCursor ? ' Load more people to check the rest.' : ''}`;
           if (reset && !result.members.length) status.textContent = 'No credited supporters yet. Email-linked payments are not automatically credited.';
         } catch { if (current === version) status.textContent = 'Early-access review is temporarily unavailable.'; }
         finally { more.disabled = false; refresh.disabled = false; }

@@ -424,7 +424,11 @@ export function createPortalDatabase(client, exchangeRate = historicalExchangeRa
       ]);
       const byAccount = new Map(accounts.map((account) => [account.discordUserId, account]));
       const byBalance = new Map(balances.map((balance) => [balance.discordUserId, balance]));
-      const idsToReview = [...new Set([...byAccount.keys(), ...byBalance.keys(),
+      const unassigned = await client.kofiEvent.findMany({ where: { supporterDiscordUserId: null,
+        eventType: { in: ['Donation', 'Subscription'] }, supporterEmail: { not: null } }, select: { supporterEmail: true } });
+      const paymentEmails = new Set(unassigned.map((event) => event.supporterEmail));
+      const matchingAccounts = accounts.filter((account) => account.emails.some((email) => paymentEmails.has(email.email)));
+      const idsToReview = [...new Set([...matchingAccounts.map((account) => account.discordUserId), ...byBalance.keys(),
         ...assigned.flatMap((event) => event.supporterDiscordUserId ? [event.supporterDiscordUserId] : [])])]
         .filter((id) => id !== testSupporterDiscordUserId && (!before || id > before)).sort().slice(0, 51);
       const rows = idsToReview.map((discordUserId) => byBalance.get(discordUserId) ?? {
