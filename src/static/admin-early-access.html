@@ -25,22 +25,26 @@
       <mdw-top-app-bar headline="Early access"><mdw-icon-button id="portal-menu" slot="leading" icon="menu" aria-label="Toggle navigation">Menu</mdw-icon-button></mdw-top-app-bar>
       <main id="content" class="portal-content">
     <mdw-box gap="16">
-    <mdw-label ink="primary">Owner workspace · Donations</mdw-label><mdw-headline size="large" role="heading" aria-level="1">Early-access review</mdw-headline><mdw-body>See who earned access, how long it lasts, and which payments qualify.</mdw-body>
-    <mdw-card outlined><mdw-details summary="How access works"><mdw-box padding="24"><mdw-body ink="on-surface-variant">Donations earn access time. Import past payments, review each supporter, then approve their role. Importing alone does not grant access.</mdw-body></mdw-box></mdw-details></mdw-card>
+    <mdw-headline size="large" role="heading" aria-level="1">Missing Early Access roles</mdw-headline><mdw-body>Check Discord roles for supporters with credited payments. Checking does not grant roles or credit email-linked payments.</mdw-body>
     <mdw-body id="early-access-status" role="status">Checking owner access…</mdw-body>
-    <mdw-box row wrap gap="12"><mdw-button id="early-access-import" filled type="button" icon="download" hidden>Import historical receipts</mdw-button><mdw-button id="early-access-refresh" outlined type="button" icon="refresh">Refresh</mdw-button></mdw-box>
-    <mdw-body id="early-access-import-status" role="status"></mdw-body>
+    <mdw-box row wrap gap="12"><mdw-button id="early-access-refresh" filled type="button" icon="refresh">Check missing roles</mdw-button></mdw-box>
     <mdw-body id="early-access-approval-status" role="status"></mdw-body>
     <section id="early-access-content" hidden>
-      <mdw-box gap="12"><mdw-label ink="primary">01 / Review queue</mdw-label><mdw-title size="large" role="heading" aria-level="2">People and access</mdw-title>
-      <div id="early-access-list" class="record-grid" role="list" aria-label="Early-access members"></div>
+      <mdw-box gap="12">
+      <mdw-grid padding="12" gap="8" class="role-review-row" aria-label="Column headings">
+        <mdw-title size="small" col-span="2" col-span-8="3" col-span-12="3">Supporter</mdw-title>
+        <mdw-title size="small" col-span="2" col-span-8="1" col-span-12="2">Credited payments</mdw-title>
+        <mdw-title size="small" col-span="2" col-span-8="2" col-span-12="2">Access until</mdw-title>
+        <mdw-title size="small" col-span="2" col-span-8="2" col-span-12="2">Discord role</mdw-title>
+        <mdw-title size="small" col-span="4" col-span-8="8" col-span-12="3">Payments / actions</mdw-title>
+      </mdw-grid>
+      <mdw-box id="early-access-list" role="list" aria-label="Early Access role checks" gap="0"></mdw-box>
       <mdw-button id="early-access-more" outlined type="button" hidden>Load more people</mdw-button>
-      <mdw-divider></mdw-divider><mdw-label ink="primary">02 / Payment history</mdw-label><mdw-title size="large" role="heading" aria-level="2">Selected person</mdw-title>
-      <mdw-body id="early-access-detail-status" role="status">Select Review payments to see periods and qualifying donations.</mdw-body>
+      <mdw-body id="early-access-detail-status" role="status"></mdw-body>
       <div id="early-access-detail" hidden>
         <mdw-title role="heading" aria-level="3">Access periods</mdw-title>
         <ul id="early-access-periods"></ul>
-        <mdw-title role="heading" aria-level="3">Credited payments</mdw-title>
+        <mdw-title role="heading" aria-level="3">Matching payments</mdw-title>
         <ul id="early-access-contributions"></ul>
         <mdw-button id="early-access-contributions-more" outlined type="button" hidden>Load more payments</mdw-button>
       </div>

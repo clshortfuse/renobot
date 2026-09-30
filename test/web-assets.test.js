@@ -118,7 +118,7 @@ describe('static portal assets', () => {
     assert.doesNotMatch(siteJs, /createElement\('span'\)|membership-state/u);
     assert.match(siteJs, /\.observe\(/u);
     assert.match(siteJs, /\.childEvents\(/u);
-    assert.doesNotMatch(siteJs, /recordFields|createElement\('mdw-/u);
+    assert.doesNotMatch(siteJs, /recordFields/u);
     assert.match(modderKofiPage, /<mdw-box id="kofi-memberships-list" role="list"/u);
     assert.match(siteJs, /col-span-12="3"/u);
   });
@@ -258,7 +258,7 @@ describe('static portal assets', () => {
       'early-access-import', 'early-access-import-status', 'early-access-content', 'early-access-list',
       'early-access-more', 'early-access-refresh', 'early-access-contributions-more',
       'early-access-detail-status', 'early-access-detail', 'early-access-periods', 'early-access-contributions']
-      .map((id) => [id, { hidden: true, addEventListener() {}, replaceChildren() {}, append() {} }]));
+      .map((id) => [id, { hidden: true, setAttribute() {}, prepend() {}, addEventListener() {}, replaceChildren() {}, append() {} }]));
     /** @type {any[]} */
     let rows = [];
     /** @type {any[]} */
@@ -267,6 +267,16 @@ describe('static portal assets', () => {
     nodes['early-access-contributions'].replaceChildren = (/** @type {any[]} */ ...items) => { contributions = items; };
     /** @type {(() => void) | undefined} */
     let review;
+    /** @type {(() => void) | undefined} */
+    let grant;
+    /** @type {(() => void) | undefined} */
+    let refresh;
+    let checks = 0;
+    /** @type {string[]} */
+    const approvals = [];
+    nodes['early-access-refresh'].addEventListener = (/** @type {string} */ name, /** @type {() => void} */ callback) => {
+      if (name === 'click') refresh = callback;
+    };
     /** @type {(() => void) | undefined} */
     let importReceipts;
     /** @type {string[]} */
@@ -277,23 +287,26 @@ describe('static portal assets', () => {
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
       URLSearchParams,
       document: { body: { dataset: { page: 'admin-early-access' } },
+        querySelectorAll: () => [rows[0]?.children[4].children[0]],
         getElementById: (/** @type {string} */ id) => nodes[id],
-        createElement: (/** @type {string} */ tag) => tag === 'renobot-early-access'
-          ? { state: {}, patch(/** @type {object} */ state) { Object.assign(this.state, state); }, setAttribute() {}, addEventListener(/** @type {string} */ name, /** @type {() => void} */ callback) {
-            if (name === 'review-payments') review = callback;
-          } }
-          : { tagName: tag, textContent: '', setAttribute() {}, children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...items) {
+        createElement: (/** @type {string} */ tag) => ({ tagName: tag, textContent: '', setAttribute() {}, after() {},
+          addEventListener(/** @type {string} */ name, /** @type {() => void} */ callback) {
+            if (name === 'change' && this.tagName === 'mdw-icon-button') review = callback;
+            if (name === 'click' && this.textContent === 'Grant role') grant = callback;
+          }, prepend() {}, children: /** @type {any[]} */ ([]), append(/** @type {any[]} */ ...items) {
             this.children.push(...items);
-          } } },
+          } }) },
       fetch: async (/** @type {string} */ path, /** @type {{ body?: URLSearchParams }} */ options) => {
         if (path.endsWith('/import')) importBodies.push(options.body?.toString() ?? '');
+        if (path.endsWith('/approve')) approvals.push(options.body?.toString() ?? '');
+        if (path === '/app/api/admin/early-access') checks++;
         return { ok: true, json: async () => path === '/auth/session'
         ? { username: 'owner', csrf: 'owner-csrf' }
         : path.endsWith('/import') ? { scanned: importBodies.length === 1 ? 50 : 1,
           nextCursor: importBodies.length === 1 ? 'receiptCursor' : null }
         : path === '/app/api/admin/early-access' ? { enabled: true, members: [{ discordUserId: '12345678901234567',
           discordName: '<img onerror=alert(1)>', totalAmount: '13.00', currency: 'USD', creditedMonths: 2,
-          expiresAt: '2099-10-29T00:00:00Z', active: true, roleManaged: true, syncStatus: 'scheduled',
+          expiresAt: '2099-10-29T00:00:00Z', active: true, roleStatus: 'missing', roleManaged: true, syncStatus: 'scheduled',
           nextAttemptAt: null }], nextCursor: null }
           : { periods: [{ startedAt: '2026-09-29T00:00:00Z', expiresAt: '2026-11-29T00:00:00Z', months: 2 }],
             contributions: [{ eventId: 'receipt', amount: '13.00', currency: 'USD', eventType: 'Donation',
@@ -301,20 +314,36 @@ describe('static portal assets', () => {
                     modderDiscordUserId: '23456789012345678' }], nextCursor: null } };
                   },
     });
-    assert.equal(rows[0]?.state.person, '<img onerror=alert(1)>');
-    assert.equal(rows[0]?.state.donated, '13.00 USD');
+    assert.equal(rows[0]?.children[0].textContent, '<img onerror=alert(1)>');
+    assert.equal(rows[0]?.children[1].textContent, '13.00 USD');
+    assert.equal(rows[0]?.children[3].textContent, 'Missing role');
+    assert.equal(rows[0]?.children[4].children[1].hidden, false);
+    assert.match(nodes['early-access-status'].textContent, /1 eligible supporter missing/u);
     assert.ok(review);
+    assert.equal(rows[0]?.children[4].children[0].type, 'checkbox');
+    rows[0].children[4].children[0].checked = true;
     review();
     await new Promise((resolve) => setImmediate(resolve));
     assert.match(contributions[0]?.textContent ?? '', /<script> \(23456789012345678\)/u);
     assert.equal(nodes['early-access-content'].hidden, false);
     assert.equal(nodes['early-access-detail'].hidden, false);
-    assert.deepEqual(importBodies, []);
-    assert.ok(importReceipts);
-    importReceipts();
+    rows[0].children[4].children[0].checked = false;
+    review();
+    assert.equal(nodes['early-access-detail'].hidden, true);
+    assert.ok(grant);
+    grant();
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(importBodies, ['csrf=owner-csrf', 'csrf=owner-csrf&after=receiptCursor']);
-    assert.match(nodes['early-access-import-status'].textContent, /scanned 51 receipts/u);
+    assert.deepEqual(approvals, ['csrf=owner-csrf']);
+    assert.match(nodes['early-access-approval-status'].textContent, /Role requested/u);
+    assert.ok(refresh);
+    const checked = checks;
+    refresh();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(checks, checked + 1);
+    assert.deepEqual(importBodies, []);
+    assert.equal(importReceipts, undefined);
+    assert.doesNotMatch(adminEarlyAccessPage, /early-access-import/u);
+    assert.match(adminEarlyAccessPage, /Column headings/u);
   });
 
   it('renders own webhook and paged payment receipts as DOM text without stored secrets', async () => {

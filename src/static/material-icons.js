@@ -11,6 +11,7 @@ const portalIconPaths = {
   download: 'M11 3h2v9h4l-5 5-5-5h4zM5 19h14v2H5z',
   arrow_drop_down: 'M7 10l5 5 5-5z',
   expand_more: 'M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z',
+  expand_less: 'M12 8l6 6-1.41 1.41L12 10.83l-4.59 4.58L6 14z',
 };
 for (const [name, path] of Object.entries(portalIconPaths)) {
   materialIcons.svgAlias.addSVGAlias(name, path);

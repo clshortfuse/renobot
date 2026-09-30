@@ -33,20 +33,6 @@ if (material) {
     `
     .childEvents({ check: { click() { this.dispatchEvent(new Event('check-role')); } } })
     .register('renobot-membership');
-  material.CustomElement.extend()
-    .observe({ person: 'string', userId: 'string', donated: 'string', months: 'string', expiry: 'string', sync: 'string', canApprove: 'boolean', busy: 'boolean' })
-    .html`
-      <mdw-card outlined><mdw-grid padding="24" gap="16">
-        <mdw-box gap="4" col-span="4" col-span-8="8" col-span-12="12"><mdw-label size="small" ink="on-surface-variant">Discord user</mdw-label><mdw-title>{person}</mdw-title><mdw-body size="small" ink="on-surface-variant">{userId}</mdw-body></mdw-box>
-        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Donated</mdw-label><mdw-body>{donated}</mdw-body></mdw-box>
-        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Months earned</mdw-label><mdw-body>{months}</mdw-body></mdw-box>
-        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Access until</mdw-label><mdw-body>{expiry}</mdw-body></mdw-box>
-        <mdw-box gap="4" col-span="4" col-span-12="6"><mdw-label size="small" ink="on-surface-variant">Role sync</mdw-label><mdw-body>{sync}</mdw-body></mdw-box>
-        <mdw-box row wrap gap="8" col-span="4" col-span-8="8" col-span-12="12"><mdw-button id="review">Review payments</mdw-button><mdw-button id="approve" filled hidden={!canApprove} disabled={busy}>Approve role</mdw-button></mdw-box>
-      </mdw-grid></mdw-card>
-    `
-    .childEvents({ review: { click() { this.dispatchEvent(new Event('review-payments')); } }, approve: { click() { this.dispatchEvent(new Event('approve-role')); } } })
-    .register('renobot-early-access');
 }
 
 /** @typedef {HTMLElement & { patch: (state: Record<string, string | boolean>) => void, busy: boolean }} RecordElement */
@@ -209,8 +195,6 @@ async function loadSession() {
       const status = element('early-access-status');
       const approvalStatus = element('early-access-approval-status');
       const content = element('early-access-content');
-      const importButton = /** @type {HTMLButtonElement} */ (element('early-access-import'));
-      const importStatus = element('early-access-import-status');
       const more = /** @type {HTMLButtonElement} */ (element('early-access-more'));
       const paymentsMore = /** @type {HTMLButtonElement} */ (element('early-access-contributions-more'));
       /** @type {string | null} */
@@ -227,29 +211,115 @@ async function loadSession() {
         const current = version;
         const path = `/app/api/admin/early-access${reset || !cursor ? '' : `?before=${encodeURIComponent(cursor)}`}`;
         more.disabled = true;
+        status.textContent = 'Checking Discord roles…';
+        const refresh = /** @type {HTMLButtonElement} */ (element('early-access-refresh'));
+        refresh.disabled = true;
         try {
           const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
           if (response.status === 403) { status.textContent = 'Owner access required.'; return; }
           if (!response.ok) throw new Error('Review unavailable');
           /** @type {{ enabled: boolean, members: { discordUserId: string, discordName: string | null,
            * totalAmount: string, currency: string, creditedMonths: number, expiresAt: string | null,
-           * active: boolean, roleManaged: boolean, syncStatus: string, nextAttemptAt: string | null }[], nextCursor: string | null }} */
+           * active: boolean, unlinkedPayments?: number, uncreditedPayments?: number, roleStatus?: string, roleManaged: boolean, syncStatus: string, nextAttemptAt: string | null }[], nextCursor: string | null }} */
           const result = await response.json();
           if (current !== version) return;
+          result.members.sort((a, b) => Number(Boolean(b.unlinkedPayments || b.uncreditedPayments || b.active && b.roleStatus === 'missing'))
+            - Number(Boolean(a.unlinkedPayments || a.uncreditedPayments || a.active && a.roleStatus === 'missing')));
           const items = result.members.map((member) => {
-            const row = /** @type {RecordElement} */ (document.createElement('renobot-early-access'));
+            const row = document.createElement('mdw-grid');
             row.setAttribute('role', 'listitem');
-            row.className = 'record early-access-record';
-            const canApprove = result.enabled && member.active && !member.roleManaged && member.syncStatus === 'idle';
-            row.patch({ person: member.discordName ?? 'Name unavailable', userId: member.discordUserId,
-              donated: `${member.totalAmount} ${member.currency}`, months: String(member.creditedMonths),
-              expiry: member.expiresAt ? `${member.active ? 'Active' : 'Expired'} · ${new Date(member.expiresAt).toLocaleString()}` : 'Not yet earned',
-              sync: `${member.roleManaged ? 'Grant recorded' : 'Not managed'} · ${member.syncStatus}${member.nextAttemptAt ? ` · Next check ${new Date(member.nextAttemptAt).toLocaleString()}` : ''}`,
-              canApprove, busy: false });
-            row.addEventListener('review-payments', () => { void loadDetail(member.discordUserId, true); });
-            row.addEventListener('approve-role', () => {
-                if (!canApprove || row.busy) return;
-                row.busy = true;
+            row.setAttribute('padding', '12');
+            row.setAttribute('gap', '8');
+            row.setAttribute('y', 'center');
+            row.className = 'role-review-row';
+            const canApprove = result.enabled && member.active && member.roleStatus === 'missing';
+            const labels = { present: 'Has role', missing: 'Missing role', 'not-in-server': 'Not in server', unavailable: 'Could not check', disabled: 'Role not configured' };
+            let column = 0;
+            for (const text of [member.discordName ?? member.discordUserId,
+              `${member.totalAmount} ${member.currency}`, member.expiresAt
+                ? `${new Date(member.expiresAt).toLocaleDateString()}${member.active ? '' : ' · Expired'}` : 'No active access',
+              labels[/** @type {keyof typeof labels} */ (member.roleStatus)] ?? 'Could not check']) {
+              const cell = document.createElement('mdw-box');
+              cell.setAttribute('col-span', '2');
+              cell.setAttribute('col-span-8', column === 0 ? '3' : column === 1 ? '1' : '2');
+              cell.setAttribute('col-span-12', column === 0 ? '3' : '2');
+              cell.setAttribute('aria-label', ['Supporter', 'Credited payments', 'Access until', 'Discord role'][column] ?? 'Supporter information');
+              column++;
+              cell.textContent = text;
+              row.append(cell);
+            }
+            const actions = document.createElement('mdw-box');
+            actions.setAttribute('row', '');
+            actions.setAttribute('wrap', '');
+            actions.setAttribute('gap', '8');
+            actions.setAttribute('col-span', '4');
+            actions.setAttribute('col-span-8', '8');
+            actions.setAttribute('col-span-12', '3');
+            const review = /** @type {HTMLInputElement} */ (document.createElement('mdw-icon-button'));
+            review.type = 'checkbox';
+            review.setAttribute('icon', 'expand_more');
+            review.setAttribute('aria-label', 'Show payments');
+            review.setAttribute('aria-expanded', 'false');
+            review.addEventListener('change', () => {
+              const detail = element('early-access-detail');
+              review.setAttribute('aria-expanded', String(review.checked));
+              review.setAttribute('icon', review.checked ? 'expand_less' : 'expand_more');
+              if (!review.checked) {
+                if (selected === member.discordUserId) {
+                  detailVersion++;
+                  selected = null;
+                  detail.hidden = true;
+                  element('early-access-detail-status').textContent = '';
+                }
+                return;
+              }
+              for (const toggle of document.querySelectorAll('#early-access-list mdw-icon-button')) {
+                if (toggle === review) continue;
+                (/** @type {HTMLInputElement} */ (toggle)).checked = false;
+                toggle.setAttribute('aria-expanded', 'false');
+                toggle.setAttribute('icon', 'expand_more');
+              }
+              detail.setAttribute('col-span', '4');
+              detail.setAttribute('col-span-8', '8');
+              detail.setAttribute('col-span-12', '12');
+              detail.prepend(element('early-access-detail-status'));
+              row.append(detail);
+              void loadDetail(member.discordUserId, true);
+            });
+            actions.append(review);
+            for (const action of ['link', 'credit']) {
+              const count = action === 'link' ? member.unlinkedPayments : member.uncreditedPayments;
+              if (!count) continue;
+              const button = /** @type {HTMLButtonElement} */ (document.createElement('mdw-button'));
+              button.setAttribute('outlined', ''); button.type = 'button';
+              button.textContent = `${action === 'link' ? 'Link' : 'Credit'} ${count} payment${count === 1 ? '' : 's'}`;
+              button.addEventListener('click', () => {
+                if (button.disabled) return;
+                button.disabled = true;
+                approvalStatus.textContent = `${action === 'link' ? 'Linking' : 'Crediting'} payments…`;
+                void (async () => {
+                  try {
+                    const response = await fetch(`/app/api/admin/early-access/${encodeURIComponent(member.discordUserId)}/${action}`, {
+                      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                      body: new URLSearchParams({ csrf: session.csrf }),
+                    });
+                    if (!response.ok) throw new Error('Action failed');
+                    approvalStatus.textContent = action === 'link' ? 'Payments linked. Review credit separately; no role was granted.'
+                      : 'Payments reviewed for credit. No role was granted.';
+                    await loadPeople(true);
+                  } catch { approvalStatus.textContent = 'Could not update payments. Try again.'; button.disabled = false; }
+                })();
+              });
+              actions.append(button);
+            }
+            const approve = /** @type {HTMLButtonElement} */ (document.createElement('mdw-button'));
+            approve.setAttribute('filled', '');
+            approve.type = 'button';
+            approve.textContent = 'Grant role';
+            approve.hidden = !canApprove;
+            approve.addEventListener('click', () => {
+                if (!canApprove || approve.disabled) return;
+                approve.disabled = true;
                 approvalStatus.textContent = `Scheduling role for ${member.discordUserId}…`;
                 void (async () => {
                   try {
@@ -258,35 +328,45 @@ async function loadSession() {
                       body: new URLSearchParams({ csrf: session.csrf }),
                     });
                     if (!response.ok) throw new Error('Approval unavailable');
-                    approvalStatus.textContent = `Role sync queued for ${member.discordUserId}.`;
+                    approvalStatus.textContent = `Role requested for ${member.discordName ?? member.discordUserId}. Check again shortly to confirm it appears on Discord.`;
                     await loadPeople(true);
                   } catch {
                     approvalStatus.textContent = `Could not approve ${member.discordUserId}; refresh before trying again.`;
-                    row.busy = false;
+                    approve.disabled = false;
                   }
                 })();
             });
+            actions.append(approve);
+            row.append(actions);
             return row;
           });
-          if (reset) element('early-access-list').replaceChildren(...items);
+          if (reset) {
+            content.append(element('early-access-detail-status'), element('early-access-detail'));
+            element('early-access-detail').hidden = true;
+            element('early-access-detail-status').textContent = '';
+            detailVersion++;
+            element('early-access-list').replaceChildren(...items);
+          }
           else element('early-access-list').append(...items);
           cursor = result.nextCursor;
           more.hidden = !cursor;
           content.hidden = false;
-          importButton.hidden = !result.enabled;
-          status.textContent = result.enabled
-            ? 'Recorded access and grants are shown below. Role presence on Discord is not checked live.'
-            : 'Early-access role sync is disabled; stored credits are shown below.';
-          if (reset && !result.members.length) status.textContent = 'No credited supporters yet.';
+          const missing = result.members.filter((member) => member.active && member.roleStatus === 'missing').length;
+          const unavailable = result.members.filter((member) => !member.roleStatus || member.roleStatus === 'unavailable').length;
+          const paymentAttention = result.members.filter((member) => member.unlinkedPayments || member.uncreditedPayments).length;
+          status.textContent = !result.enabled ? 'Configure the Early Access role before granting access.'
+            : `${missing ? `${missing} eligible supporter${missing === 1 ? '' : 's'} missing the role.` : unavailable ? 'No missing roles confirmed; some role checks are unavailable.' : 'No eligible supporters missing the role on this page.'}${paymentAttention ? ` ${paymentAttention} account${paymentAttention === 1 ? '' : 's'} with payments needing linking or credit review.` : ''}${unavailable ? ` ${unavailable} could not be checked; try again.` : ''}${result.nextCursor ? ' Load more people to check the rest.' : ''}`;
+          if (reset && !result.members.length) status.textContent = 'No credited supporters yet. Email-linked payments are not automatically credited.';
         } catch { if (current === version) status.textContent = 'Early-access review is temporarily unavailable.'; }
-        finally { more.disabled = false; }
+        finally { more.disabled = false; refresh.disabled = false; }
       }
       /** @param {string} userId @param {boolean} reset */
       async function loadDetail(userId, reset) {
         if (reset) { detailVersion++; paymentCursor = null; selected = userId; }
         const current = detailVersion;
         paymentsMore.disabled = true;
-        element('early-access-detail-status').textContent = 'Loading credited payments…';
+        element('early-access-detail').hidden = true;
+        element('early-access-detail-status').textContent = 'Loading payments…';
         try {
           const path = `/app/api/admin/early-access/${encodeURIComponent(userId)}${paymentCursor ? `?before=${encodeURIComponent(paymentCursor)}` : ''}`;
           const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
@@ -311,40 +391,13 @@ async function loadSession() {
           paymentCursor = result.nextCursor;
           paymentsMore.hidden = !paymentCursor;
           element('early-access-detail').hidden = false;
-          element('early-access-detail-status').textContent = `Credited payment history for ${userId}.`;
+          element('early-access-detail-status').textContent = `Payment history for ${userId}. Matching payments may still need linking or credit review.`;
         } catch { if (current === detailVersion) element('early-access-detail-status').textContent = 'Could not load payment history.'; }
         finally { paymentsMore.disabled = false; }
       }
       more.addEventListener('click', () => { if (cursor && !more.disabled) void loadPeople(false); });
       paymentsMore.addEventListener('click', () => { if (selected && paymentCursor && !paymentsMore.disabled) void loadDetail(selected, false); });
       element('early-access-refresh').addEventListener('click', () => { void loadPeople(true); });
-      importButton.addEventListener('click', () => {
-        if (importButton.disabled) return;
-        importButton.disabled = true;
-        void (async () => {
-          let scanned = 0;
-          /** @type {string | null} */
-          let after = null;
-          try {
-            do {
-              const body = new URLSearchParams({ csrf: session.csrf });
-              if (after) body.set('after', after);
-              const response = await fetch('/app/api/admin/early-access/import', {
-                method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
-              });
-              if (!response.ok) throw new Error('Import unavailable');
-              /** @type {{ scanned: number, nextCursor: string | null }} */
-              const result = await response.json();
-              scanned += result.scanned;
-              after = result.nextCursor;
-              importStatus.textContent = `Scanned ${scanned} historical receipts; importing…`;
-            } while (after);
-            importStatus.textContent = `Historical import scanned ${scanned} receipts. Review each person before approving a role.`;
-            await loadPeople(true);
-          } catch { importStatus.textContent = 'Import interrupted. Run it again to safely resume; existing credits are not duplicated.'; }
-          finally { importButton.disabled = false; }
-        })();
-      });
       await loadPeople(true);
     } else if (page === 'admin-kofi') {
       const status = element('admin-kofi-status');

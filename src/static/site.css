@@ -60,6 +60,7 @@ mdw-root{min-height:100vh}
 .portal-content{min-width:0;padding:clamp(16px,3vw,40px)}
 .record-grid,.overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr));gap:16px;margin-block:24px}
 .record{min-width:0;overflow-wrap:anywhere}
+.role-review-row{border-bottom:1px solid rgb(var(--mdw-color__outline-variant));overflow-wrap:anywhere}
 .portal-content form{display:contents}
 .portal-content details{margin-block:24px}
 .portal-content summary{cursor:pointer}
