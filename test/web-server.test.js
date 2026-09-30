@@ -71,6 +71,30 @@ async function beginLogin(baseUrl, returnTo) {
 }
 
 describe('dashboard routes', () => {
+  it('requires owner and CSRF for separate account linking and crediting actions', async () => {
+    /** @type {string[][]} */
+    const calls = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      linkEmailPayments: async (/** @type {string} */ id) => { calls.push(['link', id]); return { linked: 1, more: false }; },
+      creditAccountPayments: async (/** @type {string} */ id, /** @type {string} */ currency) => {
+        calls.push(['credit', id, currency]); return { credited: 1 };
+      },
+    }));
+    const base = await startServer({ database, earlyAccessRoleId: '1554515217751216185',
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const owner = createSession({ id: 'owner', username: 'owner' }, secret);
+    const other = createSession({ id: 'member', username: 'member' }, secret);
+    for (const action of ['link', 'credit']) {
+      const url = `${base}/app/api/admin/early-access/12345678901234567/${action}`;
+      const post = (/** @type {string} */ token, /** @type {string} */ csrf) => fetch(url, { method: 'POST',
+        headers: { Cookie: `renobot_session=${token}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf }) });
+      assert.equal((await post(other, csrfToken(other, secret))).status, 403);
+      assert.equal((await post(owner, 'bad')).status, 403);
+      assert.equal((await post(owner, csrfToken(owner, secret))).status, 200);
+    }
+    assert.deepEqual(calls, [['link', '12345678901234567'], ['credit', '12345678901234567', 'USD']]);
+  });
   it('restricts CSV email repair to the authorized session with CSRF and bounded input', async () => {
     /** @type {string[]} */
     const calls = [];
@@ -173,8 +197,15 @@ describe('dashboard routes', () => {
           modderUsername: '<script>' }], nextCursor: null } : null;
       },
     }));
+    let rolePresent = false;
+    let lookupFails = false;
     const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({
       isReady: () => true, users: { fetch: async () => ({ globalName: 'Preview supporter' }) },
+      guilds: { fetch: async () => ({ members: { fetch: async (/** @type {{ user: string, force: boolean, cache: boolean }} */ query) => {
+        assert.deepEqual(query, { user: '12345678901234567', force: true, cache: false });
+        if (lookupFails) throw new Error('Discord unavailable');
+        return { roles: { cache: { has: () => rolePresent } } };
+      } } }) },
     }));
     const base = await startServer({ bot, database, earlyAccessRoleId: '1554515217751216185',
       settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
@@ -190,12 +221,17 @@ describe('dashboard routes', () => {
     assert.equal(list.members[0].totalAmount, '13.00');
     assert.equal(list.members[0].creditedMonths, 2);
     assert.equal(list.members[0].roleManaged, true);
+    assert.equal(list.members[0].roleStatus, 'missing');
+    rolePresent = true;
+    assert.equal((await (await fetch(`${base}${path}`, { headers: owner })).json()).members[0].roleStatus, 'present');
+    lookupFails = true;
+    assert.equal((await (await fetch(`${base}${path}`, { headers: owner })).json()).members[0].roleStatus, 'unavailable');
     const detail = await (await fetch(`${base}${path}/12345678901234567`, { headers: owner })).json();
     assert.equal(detail.periods[0].months, 2);
     assert.equal(detail.contributions[0].modderUsername, '<script>');
     assert.equal((await fetch(`${base}${path}/34567890123456789`, { headers: owner })).status, 404);
     assert.equal((await fetch(`${base}${path}/bad`, { headers: owner })).status, 400);
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, 5);
     assert.match(await (await fetch(`${base}/app/admin/early-access`)).text(), /Early-access review/u);
   });
   it('only allows the owner to approve one active historical Early Access recipient with CSRF', async () => {

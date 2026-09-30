@@ -58,6 +58,7 @@ describe('SQLite migrations and repositories', () => {
         assert.equal(recovered.supporterEmail, email);
         assert.equal((await database.listKofiEntries(owner.id)).missingEmailCount, 0);
         assert.equal(recovered.supporterDiscordUserId, null);
+        assert.equal((await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter.id)?.unlinkedPayments, 1);
         assert.equal(recovered.receivedAt.getTime(), original.receivedAt.getTime());
         assert.deepEqual(await database.importKofiCsv(owner.id, [repair]), { unmatched: 0, emailsUpdated: 0, unchanged: 1 });
         await assert.rejects(database.importKofiCsv(owner.id, [{ ...repair, supporterEmail: 'different@example.test' }]));
@@ -74,7 +75,15 @@ describe('SQLite migrations and repositories', () => {
       }
       assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 0, more: false });
       assert.equal((await database.supporterAccount(supporter.id)).entries.length, 2);
+      assert.equal((await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter.id)?.uncreditedPayments, 2);
+      assert.deepEqual(await database.creditAccountPayments(supporter.id, 'USD'), { credited: 2 });
+      assert.deepEqual(await database.creditAccountPayments(supporter.id, 'USD'), { credited: 0 });
+      assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter.id } }), 0);
+      assert.equal((await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter.id)?.uncreditedPayments, 0);
     } finally {
+      await client.earlyAccessCredit.deleteMany({ where: { discordUserId: supporter.id } });
+      await client.earlyAccessPeriod.deleteMany({ where: { discordUserId: supporter.id } });
+      await client.earlyAccessBalance.deleteMany({ where: { discordUserId: supporter.id } });
       await client.supporterRoleSync.deleteMany({ where: { discordUserId: supporter.id } });
       await client.kofiEntitlement.deleteMany({ where: { integrationId: integration.id } });
       await client.kofiEvent.deleteMany({ where: { integrationId: integration.id } });

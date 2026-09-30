@@ -36,7 +36,8 @@ export class MissingVerificationTokenError extends Error {}
  *   settleEarlyAccessSync: (sync: import('@prisma/client').EarlyAccessRoleSync, nextAttemptAt: Date | null, errorCode?: string) => Promise<void>,
  *   backfillEarlyAccess: (currency: string, after?: string) => Promise<{ scanned: number, nextCursor: string | null } | null>,
  *   approveEarlyAccess: (discordUserId: string, now: Date) => Promise<boolean>,
- *   listEarlyAccessReview: (roleId: string | undefined, before?: string) => Promise<{ members: { discordUserId: string, totalAmount: import('@prisma/client').Prisma.Decimal, creditedMonths: number, expiresAt: Date | null, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
+ *   creditAccountPayments: (discordUserId: string, currency: string) => Promise<{ credited: number }>,
+ *   listEarlyAccessReview: (roleId: string | undefined, before?: string) => Promise<{ members: { discordUserId: string, unlinkedPayments?: number, uncreditedPayments?: number, totalAmount: import('@prisma/client').Prisma.Decimal, creditedMonths: number, expiresAt: Date | null, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
  *   getEarlyAccessReview: (discordUserId: string, before?: string) => Promise<{ periods: import('@prisma/client').EarlyAccessPeriod[], contributions: { eventId: string, amount: import('@prisma/client').Prisma.Decimal, currency: string, eventType: string, receivedAt: Date, modderDiscordUserId: string, modderUsername: string }[], nextCursor: string | null } | null>,
  *   saveIntegration: (user: { id: string, username: string }, settings: IntegrationSettings, key: Buffer) => Promise<import('@prisma/client').KofiIntegration>,
  *   isReady: () => Promise<boolean>,
@@ -373,11 +374,33 @@ export function createPortalDatabase(client) {
         return true;
       });
     },
+    async creditAccountPayments(discordUserId, currency) {
+      if (discordUserId === testSupporterDiscordUserId) return { credited: 0 };
+      return client.$transaction(async (tx) => {
+        const events = await tx.kofiEvent.findMany({ where: { supporterDiscordUserId: discordUserId, currency,
+          eventType: { in: ['Donation', 'Subscription'] } }, orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }] });
+        let credited = 0;
+        for (const event of events) {
+          if (event.occurredAt > new Date(event.receivedAt.getTime() + 5 * 60_000)
+            || await tx.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) continue;
+          await creditEarlyAccess(tx, event, event.receivedAt, false);
+          if (await tx.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) credited++;
+        }
+        return { credited };
+      }, { timeout: 30_000 });
+    },
     async listEarlyAccessReview(roleId, before) {
-      const rows = await client.earlyAccessBalance.findMany({ where: { discordUserId: {
-        not: testSupporterDiscordUserId, ...(before ? { gt: before } : {}),
-      } },
-        orderBy: { discordUserId: 'asc' }, take: 51 });
+      const [balances, accounts] = await Promise.all([
+        client.earlyAccessBalance.findMany(),
+        client.account.findMany({ where: { emails: { some: {} } }, include: { emails: true } }),
+      ]);
+      const byAccount = new Map(accounts.map((account) => [account.discordUserId, account]));
+      const byBalance = new Map(balances.map((balance) => [balance.discordUserId, balance]));
+      const idsToReview = [...new Set([...byAccount.keys(), ...byBalance.keys()])]
+        .filter((id) => id !== testSupporterDiscordUserId && (!before || id > before)).sort().slice(0, 51);
+      const rows = idsToReview.map((discordUserId) => byBalance.get(discordUserId) ?? {
+        discordUserId, totalAmount: new Prisma.Decimal(0), creditedMonths: 0, expiresAt: null,
+      });
       const page = rows.slice(0, 50);
       const ids = page.map((row) => row.discordUserId);
       const [managed, syncs] = await Promise.all([
@@ -388,13 +411,41 @@ export function createPortalDatabase(client) {
       ]);
       const managedIds = new Set(managed.map((row) => row.discordUserId));
       const byId = new Map(syncs.map((row) => [row.discordUserId, row]));
+      const pending = new Map();
+      for (const id of ids) {
+        const emails = byAccount.get(id)?.emails.map((email) => email.email) ?? [];
+        const unlinkedPayments = emails.length ? await client.kofiEvent.count({ where: {
+          supporterDiscordUserId: null, supporterEmail: { in: emails } } }) : 0;
+        const receipts = await client.kofiEvent.findMany({ where: { supporterDiscordUserId: id,
+          eventType: { in: ['Donation', 'Subscription'] } }, select: { id: true } });
+        const credited = await client.earlyAccessCredit.count({ where: { eventId: { in: receipts.map((receipt) => receipt.id) } } });
+        pending.set(id, { unlinkedPayments, uncreditedPayments: receipts.length - credited });
+      }
       return { members: page.map((row) => ({ discordUserId: row.discordUserId, totalAmount: row.totalAmount,
+        ...pending.get(row.discordUserId),
         creditedMonths: row.creditedMonths, expiresAt: row.expiresAt,
         roleManaged: managedIds.has(row.discordUserId), sync: byId.get(row.discordUserId) ?? null })),
       nextCursor: rows.length > 50 ? page.at(-1)?.discordUserId ?? null : null };
     },
     async getEarlyAccessReview(discordUserId, before) {
       if (discordUserId === testSupporterDiscordUserId) return null;
+      const account = await client.account.findUnique({ where: { discordUserId }, include: { emails: true } });
+      if (account?.emails.length) {
+        const owner = { OR: [{ supporterDiscordUserId: discordUserId },
+          { supporterDiscordUserId: null, supporterEmail: { in: account.emails.map((email) => email.email) } }] };
+        const cursor = before ? await client.kofiEvent.findFirst({ where: { ...owner, id: before } }) : null;
+        if (before && !cursor) return { periods: [], contributions: [], nextCursor: null };
+        const rows = await client.kofiEvent.findMany({ where: { AND: [owner,
+          ...(cursor ? [{ OR: [{ receivedAt: { lt: cursor.receivedAt } }, { receivedAt: cursor.receivedAt, id: { lt: cursor.id } }] }] : [])] },
+        orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }], take: 51,
+        include: { integration: { include: { account: true } } } });
+        const events = rows.slice(0, 50);
+        const periods = await client.earlyAccessPeriod.findMany({ where: { discordUserId }, orderBy: { startedAt: 'desc' } });
+        return { periods, contributions: events.map((event) => ({ eventId: event.id, amount: event.amount,
+          currency: event.currency, eventType: event.eventType, receivedAt: event.receivedAt,
+          modderDiscordUserId: event.integration.account.discordUserId, modderUsername: event.integration.account.lastKnownUsername })),
+        nextCursor: rows.length > 50 ? events.at(-1)?.id ?? null : null };
+      }
       if (!await client.earlyAccessBalance.findUnique({ where: { discordUserId }, select: { discordUserId: true } })) return null;
       const cursor = before ? await client.earlyAccessCredit.findFirst({ where: { eventId: before, discordUserId },
         select: { eventId: true, creditedAt: true } }) : null;

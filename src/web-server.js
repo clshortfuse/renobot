@@ -215,7 +215,7 @@ export function createWebServer(options) {
         } finally { importingEarlyAccess = false; }
         return;
       }
-      if (incoming.method === 'POST' && /^\/app\/api\/admin\/early-access\/[^/]+\/approve$/u.test(url.pathname)) {
+      if (incoming.method === 'POST' && /^\/app\/api\/admin\/early-access\/[^/]+\/(approve|link|credit)$/u.test(url.pathname)) {
         const token = readCookie(incoming.headers.cookie, sessionCookie);
         const session = readSession(token, options.config.sessionSecret);
         if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
@@ -223,7 +223,8 @@ export function createWebServer(options) {
         if (!options.database || !options.earlyAccessRoleId) {
           sendJson(response, 503, { error: 'Early-access role is unavailable' }); return;
         }
-        const supporterId = url.pathname.slice('/app/api/admin/early-access/'.length, -'/approve'.length);
+        const action = url.pathname.split('/').at(-1);
+        const supporterId = url.pathname.split('/').at(-2) ?? '';
         if (!/^\d{17,20}$/u.test(supporterId)) { sendJson(response, 400, { error: 'Invalid supporter ID' }); return; }
         if (!incoming.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) {
           sendJson(response, 415, { error: 'Unsupported content type' }); return;
@@ -231,6 +232,13 @@ export function createWebServer(options) {
         const body = await readForm(incoming, 4096);
         if (!verifyCsrfToken(body.get('csrf') ?? '', token ?? '', options.config.sessionSecret)) {
           sendJson(response, 403, { error: 'Invalid CSRF token' }); return;
+        }
+        if (action === 'link') {
+          sendJson(response, 200, await options.database.linkEmailPayments(supporterId)); return;
+        }
+        if (action === 'credit') {
+          if (!options.settingsConfig) { sendJson(response, 503, { error: 'Payment settings unavailable' }); return; }
+          sendJson(response, 200, await options.database.creditAccountPayments(supporterId, options.settingsConfig.currency)); return;
         }
         if (!await options.database.approveEarlyAccess(supporterId, new Date())) {
           sendJson(response, 409, { error: 'No active early-access period to approve' }); return;
@@ -261,8 +269,11 @@ export function createWebServer(options) {
               sendJson(response, 400, { error: 'Invalid cursor' }); return;
             }
             const result = await options.database.listEarlyAccessReview(options.earlyAccessRoleId, before);
+            const guildId = options.config.guildId;
             /** @type {(string | null)[]} */
             const names = [];
+            /** @type {('present' | 'missing' | 'not-in-server' | 'unavailable' | 'disabled')[]} */
+            const roles = [];
             for (let index = 0; index < result.members.length; index += 5) {
               names.push(...await Promise.all(result.members.slice(index, index + 5).map(async (member) => {
                 try {
@@ -270,11 +281,25 @@ export function createWebServer(options) {
                   return user.globalName ?? user.username;
                 } catch { return null; }
               })));
+              roles.push(...await Promise.all(result.members.slice(index, index + 5).map(async (member) => {
+                if (!options.earlyAccessRoleId) return /** @type {const} */ ('disabled');
+                try {
+                  const guild = await options.bot.guilds.fetch(guildId);
+                  const live = await guild.members.fetch({ user: member.discordUserId, force: true, cache: false });
+                  return live.roles.cache.has(options.earlyAccessRoleId)
+                    ? /** @type {const} */ ('present') : /** @type {const} */ ('missing');
+                } catch (error) {
+                  return error instanceof DiscordAPIError && error.code === 10007
+                    ? /** @type {const} */ ('not-in-server') : /** @type {const} */ ('unavailable');
+                }
+              })));
             }
             const now = Date.now();
             sendJson(response, 200, { enabled: Boolean(options.earlyAccessRoleId),
               members: result.members.map((member, index) => ({ discordUserId: member.discordUserId,
                 discordName: names[index] ?? null,
+                roleStatus: roles[index],
+                unlinkedPayments: member.unlinkedPayments ?? 0, uncreditedPayments: member.uncreditedPayments ?? 0,
                 totalAmount: member.totalAmount.toFixed(2), currency: options.settingsConfig?.currency,
                 creditedMonths: member.creditedMonths, expiresAt: member.expiresAt?.toISOString() ?? null,
                 active: Boolean(member.expiresAt && member.expiresAt.getTime() > now),
