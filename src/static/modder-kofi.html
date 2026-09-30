@@ -42,10 +42,9 @@
       <mdw-body ink="on-surface-variant">Forwarding is unavailable. Keep your existing webhook if another service still needs your payments.</mdw-body>
       <!-- Verified real and test deliveries are both stored. Forwarding configuration is retained for future support but no outbound deliveries are made. -->
     <form id="kofi-form" hidden><mdw-box gap="12">
-      <mdw-input outlined label="Currency" id="currency" name="currency" readonly required></mdw-input>
       <mdw-input outlined label="Ko-fi verification token" supporting="Leave blank to keep the current token" id="verification-token" name="verificationToken" type="password" autocomplete="off" spellcheck="false" maxlength="256"></mdw-input>
       <mdw-body size="small" ink="on-surface-variant" id="token-status"></mdw-body>
-      <mdw-card outlined><mdw-details summary="Forwarding settings (not active)"><mdw-box padding="16" gap="12">
+      <mdw-card outlined><mdw-details summary="Forwarding settings (not active)"><div><mdw-box padding="16" gap="12">
       <mdw-select outlined label="Saved forwarding destination" id="forward-action" name="forwardUrlAction">
         <option value="keep">Keep current setting</option>
         <option value="replace">Replace destination</option>
@@ -54,7 +53,7 @@
       <mdw-input outlined label="New HTTPS destination" supporting="Only used when replacing the destination" id="forward-url" name="forwardUrl" type="url" maxlength="2048" autocomplete="off"></mdw-input>
       <mdw-body size="small" ink="on-surface-variant" id="forward-status"></mdw-body>
       <mdw-body size="small" ink="on-surface-variant">No payments are forwarded. If enabled later, your destination may receive supporter contact details and private messages.</mdw-body>
-      </mdw-box></mdw-details></mdw-card>
+      </mdw-box></div></mdw-details></mdw-card>
       <mdw-box row x="start"><mdw-button id="save-settings" filled type="submit">Save settings</mdw-button></mdw-box>
     </mdw-box></form>
     <section id="kofi-prod" hidden><mdw-box gap="12">

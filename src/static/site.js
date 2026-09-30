@@ -568,10 +568,11 @@ async function loadSession() {
           if (version === entriesVersion) element('kofi-entries-status').textContent = 'Entries are temporarily unavailable. Try again.';
         } finally { more.disabled = false; }
       }
+      let settingsCurrency = '';
       /** @param {{ minimumAmount: string, currency: string, floor: string, active: boolean,
        *   hasVerificationToken: boolean, hasForwardUrl: boolean, prodUrl: string | null, lastWebhookAt: string | null }} settings */
       const showSettings = (settings) => {
-        /** @type {HTMLInputElement} */ (element('currency')).value = settings.currency;
+        settingsCurrency = settings.currency;
         element('token-status').textContent = settings.hasVerificationToken ? 'Token saved' : 'Add your Ko-fi verification token';
         element('forward-status').textContent = settings.hasForwardUrl ? 'Destination saved' : 'No destination saved';
         element('kofi-prod').hidden = !settings.prodUrl;
@@ -617,7 +618,7 @@ async function loadSession() {
           button.disabled = true;
           try {
             const fields = new URLSearchParams({ csrf: session.csrf,
-              currency: /** @type {HTMLInputElement} */ (element('currency')).value,
+              currency: settingsCurrency,
               verificationToken: /** @type {HTMLInputElement} */ (element('verification-token')).value,
               forwardUrlAction: /** @type {HTMLSelectElement} */ (element('forward-action')).value,
               forwardUrl: /** @type {HTMLInputElement} */ (element('forward-url')).value });
