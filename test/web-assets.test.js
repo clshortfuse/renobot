@@ -318,7 +318,7 @@ describe('static portal assets', () => {
     assert.equal(rows[0]?.children[1].textContent, '13.00 USD');
     assert.equal(rows[0]?.children[3].textContent, 'Missing role');
     assert.equal(rows[0]?.children[4].children[1].hidden, false);
-    assert.match(nodes['early-access-status'].textContent, /paying supporters without the role/u);
+    assert.match(nodes['early-access-status'].textContent, /paying supporters with no recorded Renobot grant/u);
     assert.ok(review);
     assert.equal(rows[0]?.children[4].children[0].type, 'checkbox');
     rows[0].children[4].children[0].checked = true;

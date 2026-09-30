@@ -123,6 +123,8 @@ describe('SQLite migrations and repositories', () => {
       }
       assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 0, more: false });
       assert.equal((await database.supporterAccount(supporter.id)).entries.length, 2);
+      assert.equal((await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter.id)?.discordName,
+        supporter.username);
       const receipt = await client.kofiEvent.findFirstOrThrow({ where: { integrationId: integration.id } });
       for (const currency of ['EUR', 'USD']) {
         await client.kofiEvent.create({ data: { integrationId: integration.id, messageId: randomUUID(),

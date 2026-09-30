@@ -38,7 +38,7 @@ export class MissingVerificationTokenError extends Error {}
  *   backfillEarlyAccess: (currency: string, after?: string) => Promise<{ scanned: number, nextCursor: string | null } | null>,
  *   approveEarlyAccess: (discordUserId: string, now: Date) => Promise<boolean>,
  *   creditAccountPayments: (discordUserId: string, currency: string) => Promise<{ credited: number, unresolved?: { eventId: string, currency: string, reason: string }[] }>,
- *   listEarlyAccessReview: (roleId: string | undefined, before?: string, currency?: string) => Promise<{ members: { discordUserId: string, unlinkedPayments?: number, uncreditedPayments?: number, totalAmount: import('@prisma/client').Prisma.Decimal, creditedMonths: number, expiresAt: Date | null, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
+ *   listEarlyAccessReview: (roleId: string | undefined, before?: string, currency?: string) => Promise<{ members: { discordUserId: string, discordName?: string | null, unlinkedPayments?: number, uncreditedPayments?: number, totalAmount: import('@prisma/client').Prisma.Decimal, creditedMonths: number, expiresAt: Date | null, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
  *   getEarlyAccessReview: (discordUserId: string, before?: string) => Promise<{ periods: import('@prisma/client').EarlyAccessPeriod[], contributions: { eventId: string, linked?: boolean, credited?: boolean, convertedAmount?: import('@prisma/client').Prisma.Decimal | null, targetCurrency?: string | null, exchangeRate?: import('@prisma/client').Prisma.Decimal | null, rateDate?: string | null, amount: import('@prisma/client').Prisma.Decimal, currency: string, eventType: string, receivedAt: Date, modderDiscordUserId: string, modderUsername: string }[], nextCursor: string | null } | null>,
  *   saveIntegration: (user: { id: string, username: string }, settings: IntegrationSettings, key: Buffer) => Promise<import('@prisma/client').KofiIntegration>,
  *   isReady: () => Promise<boolean>,
@@ -436,6 +436,9 @@ export function createPortalDatabase(client, exchangeRate = historicalExchangeRa
       });
       const page = rows.slice(0, 50);
       const ids = page.map((row) => row.discordUserId);
+      const namedAccounts = await client.account.findMany({ where: { discordUserId: { in: ids } },
+        select: { discordUserId: true, lastKnownUsername: true } });
+      const storedNames = new Map(namedAccounts.map((account) => [account.discordUserId, account.lastKnownUsername]));
       const [managed, syncs] = await Promise.all([
         roleId ? client.managedSupporterRole.findMany({ where: { discordUserId: { in: ids }, roleId },
           select: { discordUserId: true } }) : Promise.resolve([]),
@@ -456,6 +459,7 @@ export function createPortalDatabase(client, exchangeRate = historicalExchangeRa
         pending.set(id, { unlinkedPayments, uncreditedPayments: receipts.length - credited });
       }
       return { members: page.map((row) => ({ discordUserId: row.discordUserId, totalAmount: row.totalAmount,
+        discordName: storedNames.get(row.discordUserId) ?? null,
         ...pending.get(row.discordUserId),
         creditedMonths: row.creditedMonths, expiresAt: row.expiresAt,
         roleManaged: managedIds.has(row.discordUserId), sync: byId.get(row.discordUserId) ?? null })),

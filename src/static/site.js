@@ -211,7 +211,7 @@ async function loadSession() {
         const current = version;
         const path = `/app/api/admin/early-access${reset || !cursor ? '' : `?before=${encodeURIComponent(cursor)}`}`;
         more.disabled = true;
-        status.textContent = 'Checking Discord roles…';
+        status.textContent = 'Loading payment and grant records…';
         const refresh = /** @type {HTMLButtonElement} */ (element('early-access-refresh'));
         refresh.disabled = true;
         try {
@@ -356,7 +356,7 @@ async function loadSession() {
           const unavailable = result.members.filter((member) => !member.roleStatus || member.roleStatus === 'unavailable').length;
           const paymentAttention = result.members.filter((member) => member.unlinkedPayments || member.uncreditedPayments).length;
           status.textContent = !result.enabled ? 'Configure the Early Access role before granting access.'
-            : `Showing paying supporters without the role; people who already have it are hidden.${paymentAttention ? ' Some payments still need linking or credit review.' : ''}${unavailable ? ` ${unavailable} role checks unavailable in this batch.` : ''}${result.nextCursor ? ' Load more people to check the rest.' : ''}`;
+            : `Showing paying supporters with no recorded Renobot grant.${paymentAttention ? ' Some payments still need linking or credit review.' : ''}${unavailable ? ' Grant records unavailable.' : ''}${result.nextCursor ? ' Load more people to review the rest.' : ''}`;
           if (reset && !result.members.length) status.textContent = 'No credited supporters yet. Email-linked payments are not automatically credited.';
         } catch { if (current === version) status.textContent = 'Early-access review is temporarily unavailable.'; }
         finally { more.disabled = false; refresh.disabled = false; }

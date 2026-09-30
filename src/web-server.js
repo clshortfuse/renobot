@@ -269,31 +269,11 @@ export function createWebServer(options) {
               sendJson(response, 400, { error: 'Invalid cursor' }); return;
             }
             const result = await options.database.listEarlyAccessReview(options.earlyAccessRoleId, before);
-            const liveMembers = new Map();
-            let complete = false;
-            if (options.earlyAccessRoleId && result.members.length) {
-              try {
-                const guild = await options.bot.guilds.fetch(options.config.guildId);
-                let after;
-                for (;;) {
-                  const batch = await guild.members.list({ limit: 1000, cache: false, ...(after ? { after } : {}) });
-                  for (const [id, member] of batch) liveMembers.set(id, member);
-                  if (batch.size < 1000) break;
-                  const next = [...batch.keys()].sort((a, b) => BigInt(a) < BigInt(b) ? -1 : 1).at(-1);
-                  if (!next || next === after) throw new Error('Guild member pagination stalled');
-                  after = next;
-                }
-                complete = true;
-              } catch { liveMembers.clear(); }
-            }
             const now = Date.now();
             sendJson(response, 200, { enabled: Boolean(options.earlyAccessRoleId),
-              members: result.members.map((member) => ({ discordUserId: member.discordUserId,
-                discordName: liveMembers.get(member.discordUserId)?.user.globalName
-                  ?? liveMembers.get(member.discordUserId)?.user.username ?? null,
-                roleStatus: !options.earlyAccessRoleId ? 'disabled' : !complete ? 'unavailable'
-                  : !liveMembers.has(member.discordUserId) ? 'not-in-server'
-                    : liveMembers.get(member.discordUserId).roles.cache.has(options.earlyAccessRoleId) ? 'present' : 'missing',
+              members: result.members.filter((member) => !member.roleManaged).map((member) => ({ discordUserId: member.discordUserId,
+                discordName: member.discordName ?? null,
+                roleStatus: options.earlyAccessRoleId ? 'missing' : 'disabled',
                 unlinkedPayments: member.unlinkedPayments ?? 0, uncreditedPayments: member.uncreditedPayments ?? 0,
                 totalAmount: member.totalAmount.toFixed(2), currency: options.settingsConfig?.currency,
                 creditedMonths: member.creditedMonths, expiresAt: member.expiresAt?.toISOString() ?? null,

@@ -185,8 +185,8 @@ describe('dashboard routes', () => {
     const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
       listEarlyAccessReview: async (/** @type {string} */ roleId, /** @type {string | undefined} */ before) => {
         calls.push(['list', roleId, before]);
-        return { members: [{ discordUserId: '12345678901234567', totalAmount: { toFixed: () => '13.00' },
-          creditedMonths: 2, expiresAt: new Date('2099-10-29T00:00:00Z'), roleManaged: true, sync: null }], nextCursor: null };
+        return { members: [{ discordUserId: '12345678901234567', discordName: 'Stored supporter', totalAmount: { toFixed: () => '13.00' },
+          creditedMonths: 2, expiresAt: new Date('2099-10-29T00:00:00Z'), roleManaged: rolePresent, sync: null }], nextCursor: null };
       },
       getEarlyAccessReview: async (/** @type {string} */ id) => {
         calls.push(['detail', id]);
@@ -217,15 +217,18 @@ describe('dashboard routes', () => {
     assert.equal((await fetch(`${base}${path}/12345678901234567`, { headers: other })).status, 403);
     assert.equal((await fetch(`${base}${path}?before=bad`, { headers: owner })).status, 400);
     const list = await (await fetch(`${base}${path}`, { headers: owner })).json();
-    assert.equal(list.members[0].discordName, 'Preview supporter');
+    assert.equal(list.members[0].discordName, 'Stored supporter');
     assert.equal(list.members[0].totalAmount, '13.00');
     assert.equal(list.members[0].creditedMonths, 2);
-    assert.equal(list.members[0].roleManaged, true);
+    assert.equal(list.members[0].roleManaged, false);
     assert.equal(list.members[0].roleStatus, 'missing');
     rolePresent = true;
-    assert.equal((await (await fetch(`${base}${path}`, { headers: owner })).json()).members[0].roleStatus, 'present');
+    assert.deepEqual((await (await fetch(`${base}${path}`, { headers: owner })).json()).members, []);
+    rolePresent = false;
     lookupFails = true;
-    assert.equal((await (await fetch(`${base}${path}`, { headers: owner })).json()).members[0].roleStatus, 'unavailable');
+    const unavailable = await (await fetch(`${base}${path}`, { headers: owner })).json();
+    assert.equal(unavailable.members[0].roleStatus, 'missing');
+    assert.equal(unavailable.members[0].discordName, 'Stored supporter');
     const detail = await (await fetch(`${base}${path}/12345678901234567`, { headers: owner })).json();
     assert.equal(detail.periods[0].months, 2);
     assert.equal(detail.contributions[0].modderUsername, '<script>');
