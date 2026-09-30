@@ -201,10 +201,10 @@ describe('dashboard routes', () => {
     let lookupFails = false;
     const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({
       isReady: () => true, users: { fetch: async () => ({ globalName: 'Preview supporter' }) },
-      guilds: { fetch: async () => ({ members: { fetch: async (/** @type {{ user: string, force: boolean, cache: boolean }} */ query) => {
-        assert.deepEqual(query, { user: '12345678901234567', force: true, cache: false });
+      guilds: { fetch: async () => ({ members: { list: async (/** @type {{ limit: number, cache: boolean }} */ query) => {
+        assert.deepEqual(query, { limit: 1000, cache: false });
         if (lookupFails) throw new Error('Discord unavailable');
-        return { roles: { cache: { has: () => rolePresent } } };
+        return new Map([['12345678901234567', { user: { globalName: 'Preview supporter' }, roles: { cache: { has: () => rolePresent } } }]]);
       } } }) },
     }));
     const base = await startServer({ bot, database, earlyAccessRoleId: '1554515217751216185',

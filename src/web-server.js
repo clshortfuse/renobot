@@ -269,36 +269,31 @@ export function createWebServer(options) {
               sendJson(response, 400, { error: 'Invalid cursor' }); return;
             }
             const result = await options.database.listEarlyAccessReview(options.earlyAccessRoleId, before);
-            const guildId = options.config.guildId;
-            /** @type {(string | null)[]} */
-            const names = [];
-            /** @type {('present' | 'missing' | 'not-in-server' | 'unavailable' | 'disabled')[]} */
-            const roles = [];
-            for (let index = 0; index < result.members.length; index += 5) {
-              names.push(...await Promise.all(result.members.slice(index, index + 5).map(async (member) => {
-                try {
-                  const user = await options.bot.users.fetch(member.discordUserId);
-                  return user.globalName ?? user.username;
-                } catch { return null; }
-              })));
-              roles.push(...await Promise.all(result.members.slice(index, index + 5).map(async (member) => {
-                if (!options.earlyAccessRoleId) return /** @type {const} */ ('disabled');
-                try {
-                  const guild = await options.bot.guilds.fetch(guildId);
-                  const live = await guild.members.fetch({ user: member.discordUserId, force: true, cache: false });
-                  return live.roles.cache.has(options.earlyAccessRoleId)
-                    ? /** @type {const} */ ('present') : /** @type {const} */ ('missing');
-                } catch (error) {
-                  return error instanceof DiscordAPIError && error.code === 10007
-                    ? /** @type {const} */ ('not-in-server') : /** @type {const} */ ('unavailable');
+            const liveMembers = new Map();
+            let complete = false;
+            if (options.earlyAccessRoleId && result.members.length) {
+              try {
+                const guild = await options.bot.guilds.fetch(options.config.guildId);
+                let after;
+                for (;;) {
+                  const batch = await guild.members.list({ limit: 1000, cache: false, ...(after ? { after } : {}) });
+                  for (const [id, member] of batch) liveMembers.set(id, member);
+                  if (batch.size < 1000) break;
+                  const next = [...batch.keys()].sort((a, b) => BigInt(a) < BigInt(b) ? -1 : 1).at(-1);
+                  if (!next || next === after) throw new Error('Guild member pagination stalled');
+                  after = next;
                 }
-              })));
+                complete = true;
+              } catch { liveMembers.clear(); }
             }
             const now = Date.now();
             sendJson(response, 200, { enabled: Boolean(options.earlyAccessRoleId),
-              members: result.members.map((member, index) => ({ discordUserId: member.discordUserId,
-                discordName: names[index] ?? null,
-                roleStatus: roles[index],
+              members: result.members.map((member) => ({ discordUserId: member.discordUserId,
+                discordName: liveMembers.get(member.discordUserId)?.user.globalName
+                  ?? liveMembers.get(member.discordUserId)?.user.username ?? null,
+                roleStatus: !options.earlyAccessRoleId ? 'disabled' : !complete ? 'unavailable'
+                  : !liveMembers.has(member.discordUserId) ? 'not-in-server'
+                    : liveMembers.get(member.discordUserId).roles.cache.has(options.earlyAccessRoleId) ? 'present' : 'missing',
                 unlinkedPayments: member.unlinkedPayments ?? 0, uncreditedPayments: member.uncreditedPayments ?? 0,
                 totalAmount: member.totalAmount.toFixed(2), currency: options.settingsConfig?.currency,
                 creditedMonths: member.creditedMonths, expiresAt: member.expiresAt?.toISOString() ?? null,
