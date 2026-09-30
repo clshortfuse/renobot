@@ -80,7 +80,7 @@ describe('dashboard routes', () => {
         calls.push(['credit', id, currency]); return { credited: 1 };
       },
     }));
-    const base = await startServer({ database, earlyAccessRoleId: '1554515217751216185',
+    const base = await startServer({ database,
       settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
     const owner = createSession({ id: 'owner', username: 'owner' }, secret);
     const other = createSession({ id: 'member', username: 'member' }, secret);

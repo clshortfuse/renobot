@@ -220,7 +220,7 @@ export function createWebServer(options) {
         const session = readSession(token, options.config.sessionSecret);
         if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
         if (session.id !== options.config.ownerUserId) { sendJson(response, 403, { error: 'Access denied' }); return; }
-        if (!options.database || !options.earlyAccessRoleId) {
+        if (!options.database || (url.pathname.endsWith('/approve') && !options.earlyAccessRoleId)) {
           sendJson(response, 503, { error: 'Early-access role is unavailable' }); return;
         }
         const action = url.pathname.split('/').at(-1);
