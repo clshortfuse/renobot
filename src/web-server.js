@@ -318,6 +318,9 @@ export function createWebServer(options) {
               startedAt: period.startedAt.toISOString(), expiresAt: period.expiresAt.toISOString(), months: period.months,
             })), contributions: result.contributions.map((entry) => ({
               eventId: entry.eventId, amount: entry.amount.toFixed(2), currency: entry.currency,
+              linked: entry.linked ?? true, credited: entry.credited ?? true,
+              convertedAmount: entry.convertedAmount?.toFixed(2) ?? null, targetCurrency: entry.targetCurrency ?? null,
+              exchangeRate: entry.exchangeRate?.toString() ?? null, rateDate: entry.rateDate ?? null,
               eventType: entry.eventType, receivedAt: entry.receivedAt.toISOString(),
               modderDiscordUserId: entry.modderDiscordUserId, modderUsername: entry.modderUsername,
             })), nextCursor: result.nextCursor });

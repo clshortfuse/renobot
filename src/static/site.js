@@ -304,8 +304,10 @@ async function loadSession() {
                       body: new URLSearchParams({ csrf: session.csrf }),
                     });
                     if (!response.ok) throw new Error('Action failed');
+                    /** @type {{ credited?: number, unresolved?: { currency: string, reason: string }[] }} */
+                    const outcome = await response.json();
                     approvalStatus.textContent = action === 'link' ? 'Payments linked. Review credit separately; no role was granted.'
-                      : 'Payments reviewed for credit. No role was granted.';
+                      : `${outcome.credited ?? 0} payments credited. No role was granted.${outcome.unresolved?.length ? ` ${outcome.unresolved.length} remain pending: historical exchange rate unavailable (${[...new Set(outcome.unresolved.map((entry) => entry.currency))].join(', ')}).` : ''}`;
                     await loadPeople(true);
                   } catch { approvalStatus.textContent = 'Could not update payments. Try again.'; button.disabled = false; }
                 })();
@@ -373,6 +375,8 @@ async function loadSession() {
           if (!response.ok) throw new Error('Detail unavailable');
           /** @type {{ periods: { startedAt: string, expiresAt: string, months: number }[], contributions: {
            * eventId: string, amount: string, currency: string, eventType: string, receivedAt: string,
+           * linked?: boolean, credited?: boolean, convertedAmount?: string | null, targetCurrency?: string | null,
+           * exchangeRate?: string | null, rateDate?: string | null,
            * modderDiscordUserId: string, modderUsername: string }[], nextCursor: string | null }} */
           const result = await response.json();
           if (current !== detailVersion) return;
@@ -384,6 +388,10 @@ async function loadSession() {
           const items = result.contributions.map((entry) => {
             const item = document.createElement('li');
             item.textContent = `${new Date(entry.receivedAt).toLocaleString()} · ${entry.amount} ${entry.currency} · ${entry.eventType} · To ${entry.modderUsername} (${entry.modderDiscordUserId}) · Receipt ${entry.eventId}`;
+            item.textContent += entry.credited ? ' · Credited' : entry.linked ? ' · Linked · Awaiting credit / conversion' : ' · Awaiting linking';
+            if (entry.convertedAmount && entry.targetCurrency) {
+              item.textContent += ` · ${entry.convertedAmount} ${entry.targetCurrency} credited · Rate ${entry.exchangeRate} (${entry.rateDate})`;
+            }
             return item;
           });
           if (reset) element('early-access-contributions').replaceChildren(...items);
