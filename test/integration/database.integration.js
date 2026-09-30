@@ -25,7 +25,10 @@ function discordId() { return `10${randomInt(10000000, 100000000)}${randomInt(10
 
 describe('SQLite migrations and repositories', () => {
   it('reviews assigned email-less supporters and converts five small donations cumulatively', async () => {
-    const database = createPortalDatabase(client, async () => ({ rate: '1.2', date: '2026-09-01' }));
+    const database = createPortalDatabase(client, async (source) => {
+      if (source === 'XYZ') throw new Error('Rate unavailable');
+      return { rate: '1.2', date: '2026-09-01' };
+    });
     const owner = { id: discordId(), username: 'conversion-modder' };
     const supporter = discordId();
     const integration = await database.saveIntegration(owner, { minimumAmount: '5.00', currency: 'USD',
@@ -41,8 +44,15 @@ describe('SQLite migrations and repositories', () => {
       const member = (await database.listEarlyAccessReview(undefined)).members.find((row) => row.discordUserId === supporter);
       assert.equal(member?.uncreditedPayments, 5);
       assert.equal((await database.getEarlyAccessReview(supporter))?.contributions.length, 5);
-      assert.deepEqual(await database.creditAccountPayments(supporter, 'USD'), { credited: 5 });
-      assert.deepEqual(await database.creditAccountPayments(supporter, 'USD'), { credited: 0 });
+      await client.kofiEvent.create({ data: { integrationId: integration.id, messageId: randomUUID(),
+        transactionId: randomUUID(), eventType: 'Donation', amount: '1.00', currency: 'XYZ',
+        subscriptionPayment: false, firstSubscriptionPayment: false, supporterDiscordUserId: supporter,
+        receivedAt: new Date('2026-09-01T12:00:00Z'), occurredAt: new Date('2026-09-01T12:00:00Z'),
+        outcome: 'recorded-no-entitlement' } });
+      const credited = await database.creditAccountPayments(supporter, 'USD');
+      assert.equal(credited.credited, 5);
+      assert.equal(credited.unresolved?.length, 1);
+      assert.equal((await database.creditAccountPayments(supporter, 'USD')).credited, 0);
       const balance = await client.earlyAccessBalance.findUniqueOrThrow({ where: { discordUserId: supporter } });
       assert.equal(balance.totalAmount.toFixed(2), '6.00');
       assert.equal(balance.creditedMonths, 1);
@@ -50,6 +60,8 @@ describe('SQLite migrations and repositories', () => {
       assert.equal(credits.length, 5);
       assert.equal(credits[0]?.convertedAmount?.toFixed(2), '1.20');
       assert.equal(credits[0]?.targetCurrency, 'USD');
+      const detail = await database.getEarlyAccessReview(supporter);
+      assert.equal(detail?.contributions.find((entry) => entry.currency === 'EUR')?.convertedAmount?.toFixed(2), '1.20');
       assert.equal(await client.earlyAccessRoleSync.count({ where: { discordUserId: supporter } }), 0);
     } finally {
       await client.earlyAccessCredit.deleteMany({ where: { discordUserId: supporter } });

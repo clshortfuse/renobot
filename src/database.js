@@ -37,9 +37,9 @@ export class MissingVerificationTokenError extends Error {}
  *   settleEarlyAccessSync: (sync: import('@prisma/client').EarlyAccessRoleSync, nextAttemptAt: Date | null, errorCode?: string) => Promise<void>,
  *   backfillEarlyAccess: (currency: string, after?: string) => Promise<{ scanned: number, nextCursor: string | null } | null>,
  *   approveEarlyAccess: (discordUserId: string, now: Date) => Promise<boolean>,
- *   creditAccountPayments: (discordUserId: string, currency: string) => Promise<{ credited: number }>,
+ *   creditAccountPayments: (discordUserId: string, currency: string) => Promise<{ credited: number, unresolved?: { eventId: string, currency: string, reason: string }[] }>,
  *   listEarlyAccessReview: (roleId: string | undefined, before?: string, currency?: string) => Promise<{ members: { discordUserId: string, unlinkedPayments?: number, uncreditedPayments?: number, totalAmount: import('@prisma/client').Prisma.Decimal, creditedMonths: number, expiresAt: Date | null, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
- *   getEarlyAccessReview: (discordUserId: string, before?: string) => Promise<{ periods: import('@prisma/client').EarlyAccessPeriod[], contributions: { eventId: string, amount: import('@prisma/client').Prisma.Decimal, currency: string, eventType: string, receivedAt: Date, modderDiscordUserId: string, modderUsername: string }[], nextCursor: string | null } | null>,
+ *   getEarlyAccessReview: (discordUserId: string, before?: string) => Promise<{ periods: import('@prisma/client').EarlyAccessPeriod[], contributions: { eventId: string, linked?: boolean, credited?: boolean, convertedAmount?: import('@prisma/client').Prisma.Decimal | null, targetCurrency?: string | null, exchangeRate?: import('@prisma/client').Prisma.Decimal | null, rateDate?: string | null, amount: import('@prisma/client').Prisma.Decimal, currency: string, eventType: string, receivedAt: Date, modderDiscordUserId: string, modderUsername: string }[], nextCursor: string | null } | null>,
  *   saveIntegration: (user: { id: string, username: string }, settings: IntegrationSettings, key: Buffer) => Promise<import('@prisma/client').KofiIntegration>,
  *   isReady: () => Promise<boolean>,
  *   disconnect: () => Promise<void>,
@@ -381,13 +381,22 @@ export function createPortalDatabase(client, exchangeRate = historicalExchangeRa
       const candidates = await client.kofiEvent.findMany({ where: { supporterDiscordUserId: discordUserId,
         eventType: { in: ['Donation', 'Subscription'] } }, orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }] });
       const conversions = new Map();
+      /** @type {{ eventId: string, currency: string, reason: string }[]} */
+      const unresolved = [];
       const rates = new Map();
       for (const event of candidates) {
         if (event.occurredAt.getTime() > event.receivedAt.getTime() + 5 * 60_000
           || await client.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) continue;
         const key = `${event.currency}:${event.occurredAt.toISOString().slice(0, 10)}`;
-        if (!rates.has(key)) rates.set(key, await exchangeRate(event.currency, currency, event.occurredAt));
+        if (!rates.has(key)) {
+          try { rates.set(key, await exchangeRate(event.currency, currency, event.occurredAt)); }
+          catch { rates.set(key, null); }
+        }
         const rate = rates.get(key);
+        if (!rate) {
+          unresolved.push({ eventId: event.id, currency: event.currency, reason: 'Historical exchange rate unavailable' });
+          continue;
+        }
         conversions.set(event.id, { convertedAmount: event.amount.mul(rate.rate), targetCurrency: currency,
           exchangeRate: rate.rate, rateDate: rate.date });
       }
@@ -403,7 +412,7 @@ export function createPortalDatabase(client, exchangeRate = historicalExchangeRa
           await creditEarlyAccess(tx, event, event.receivedAt, false, conversion);
           if (await tx.earlyAccessCredit.findUnique({ where: { eventId: event.id } })) credited++;
         }
-        return { credited };
+        return { credited, ...(unresolved.length ? { unresolved } : {}) };
       }, { timeout: 30_000 });
     },
     async listEarlyAccessReview(roleId, before) {
@@ -461,8 +470,14 @@ export function createPortalDatabase(client, exchangeRate = historicalExchangeRa
         orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }], take: 51,
         include: { integration: { include: { account: true } } } });
         const events = rows.slice(0, 50);
+        const credits = await client.earlyAccessCredit.findMany({ where: { eventId: { in: events.map((event) => event.id) } } });
+        const byCredit = new Map(credits.map((credit) => [credit.eventId, credit]));
         const periods = await client.earlyAccessPeriod.findMany({ where: { discordUserId }, orderBy: { startedAt: 'desc' } });
         return { periods, contributions: events.map((event) => ({ eventId: event.id, amount: event.amount,
+          linked: Boolean(event.supporterDiscordUserId), credited: byCredit.has(event.id),
+          convertedAmount: byCredit.get(event.id)?.convertedAmount ?? null,
+          targetCurrency: byCredit.get(event.id)?.targetCurrency ?? null,
+          exchangeRate: byCredit.get(event.id)?.exchangeRate ?? null, rateDate: byCredit.get(event.id)?.rateDate ?? null,
           currency: event.currency, eventType: event.eventType, receivedAt: event.receivedAt,
           modderDiscordUserId: event.integration.account.discordUserId, modderUsername: event.integration.account.lastKnownUsername })),
         nextCursor: rows.length > 50 ? events.at(-1)?.id ?? null : null };
