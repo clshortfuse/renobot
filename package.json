@@ -17,6 +17,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:test": "node scripts/run-db-integration.js",
+    "discord:test": "node --env-file-if-exists=.env --test test/integration/discord.live.js",
     "db:validate": "prisma validate",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
