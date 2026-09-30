@@ -15,12 +15,13 @@ export class MissingVerificationTokenError extends Error {}
  *   verifyDiscordEmail: (discordUserId: string, email: string) => Promise<boolean>,
  *   supporterAccount: (discordUserId: string, before?: string) => Promise<{ emails: import('@prisma/client').AccountEmail[], balance: import('@prisma/client').EarlyAccessBalance | null, entries: (import('@prisma/client').KofiEvent & { integration: { account: { lastKnownUsername: string } } })[], nextCursor: string | null }>,
  *   linkEmailPayments: (discordUserId: string) => Promise<{ linked: number, more: boolean }>,
+ *   importKofiCsv: (discordUserId: string, payments: import('./kofi-csv.js').CsvPayment[]) => Promise<{ unmatched: number, emailsUpdated: number, unchanged: number }>,
  *   getIntegration: (discordUserId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   findIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   findEnabledIntegrationByEndpoint: (endpointId: string) => Promise<import('@prisma/client').KofiIntegration | null>,
  *   recordKofiPayment: (integrationId: string, tokenCiphertext: string, payment: import('./kofi-ingestion.js').KofiPayment) => Promise<'rejected' | 'accepted' | 'duplicate'>,
  *   recordKofiReceipt: (integrationId: string, tokenCiphertext: string, payment: import('./kofi-ingestion.js').KofiPayment, membershipFloor?: string, source?: import('./kofi-ingestion.js').KofiDeliverySource, earlyAccessEnabled?: boolean) => Promise<'rejected' | 'accepted' | 'duplicate'>,
- *   listKofiEntries: (discordUserId: string, before?: string) => Promise<{ entries: import('@prisma/client').KofiEvent[], nextCursor: string | null }>,
+ *   listKofiEntries: (discordUserId: string, before?: string) => Promise<{ entries: import('@prisma/client').KofiEvent[], nextCursor: string | null, missingEmailCount?: number }>,
  *   listKofiMemberships: (discordUserId: string, roleId: string | undefined, before?: string) => Promise<{ members: { discordUserId: string, expiresAt: Date, lastPaymentAt: Date, roleManaged: boolean, sync: { nextAttemptAt: Date, lastErrorCode: string | null } | null }[], nextCursor: string | null }>,
  *   hasKofiMembership: (modderDiscordUserId: string, supporterDiscordUserId: string) => Promise<boolean>,
  *   listAdminKofiEntries: (before?: string) => Promise<{ entries: (import('@prisma/client').KofiEvent & { integration: { account: { discordUserId: string, lastKnownUsername: string } } })[], nextCursor: string | null }>,
@@ -203,6 +204,35 @@ export function createPortalDatabase(client) {
         return { linked, more: rows.length > 50 };
       });
     },
+    async importKofiCsv(discordUserId, payments) {
+      return client.$transaction(async (tx) => {
+        const integration = await tx.kofiIntegration.findFirstOrThrow({ where: { account: { discordUserId } } });
+        let unmatched = 0;
+        let emailsUpdated = 0;
+        let unchanged = 0;
+        for (const payment of payments) {
+          const rows = await tx.kofiEvent.findMany({ where: { integrationId: integration.id, transactionId: payment.transactionId } });
+          if (rows.length > 1) throw new Error('Ambiguous stored transaction.');
+          const existing = rows[0];
+          if (existing) {
+            // CSV dates have minute precision; never replace the original webhook timestamp.
+            if (!existing.amount.equals(payment.amount) || existing.currency !== payment.currency
+              || existing.eventType !== payment.eventType || existing.subscriptionPayment !== payment.subscriptionPayment
+              || Math.floor(existing.occurredAt.getTime() / 60_000) !== Math.floor(payment.occurredAt.getTime() / 60_000)
+              || existing.supporterEmail && payment.supporterEmail && existing.supporterEmail !== payment.supporterEmail) {
+              throw new Error('CSV conflicts with a stored transaction.');
+            }
+            if (!existing.supporterEmail && payment.supporterEmail) {
+              await tx.kofiEvent.update({ where: { id: existing.id }, data: { supporterEmail: payment.supporterEmail } });
+              emailsUpdated++;
+            } else unchanged++;
+          } else {
+            unmatched++;
+          }
+        }
+        return { unmatched, emailsUpdated, unchanged };
+      }, { timeout: 30_000 });
+    },
     async getIntegration(discordUserId) {
       return client.kofiIntegration.findFirst({ where: { account: { discordUserId } } });
     },
@@ -214,15 +244,16 @@ export function createPortalDatabase(client) {
     },
     async listKofiEntries(discordUserId, before) {
       const owner = { integration: { account: { discordUserId } } };
+      const missingEmailCount = await client.kofiEvent.count({ where: { ...owner, supporterEmail: null } });
       const cursor = before ? await client.kofiEvent.findFirst({ where: { ...owner, id: before },
         select: { id: true, receivedAt: true } }) : null;
-      if (before && !cursor) return { entries: [], nextCursor: null };
+      if (before && !cursor) return { entries: [], nextCursor: null, missingEmailCount };
       const rows = await client.kofiEvent.findMany({ where: { ...owner,
         ...(cursor ? { OR: [ { receivedAt: { lt: cursor.receivedAt } },
           { receivedAt: cursor.receivedAt, id: { lt: cursor.id } } ] } : {}) },
         orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }], take: 51 });
       const entries = rows.slice(0, 50);
-      return { entries, nextCursor: rows.length > 50 ? entries.at(-1)?.id ?? null : null };
+      return { entries, nextCursor: rows.length > 50 ? entries.at(-1)?.id ?? null : null, missingEmailCount };
     },
     async listKofiMemberships(discordUserId, roleId, before) {
       const integration = await client.kofiIntegration.findFirst({ where: { account: { discordUserId } }, select: { id: true } });

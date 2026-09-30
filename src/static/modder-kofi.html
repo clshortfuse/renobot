@@ -71,6 +71,12 @@
       <mdw-box padding="24" gap="12">
       <!-- Only qualifying subscriptions renew membership when role sync is enabled. Receipts are listed newest first, including test deliveries. -->
       <mdw-body id="kofi-entries-status" role="status">Loading entries…</mdw-body>
+      <mdw-box id="kofi-csv-repair" gap="12" hidden>
+      <mdw-body size="small">Repair missing emails using your Ko-fi transaction CSV. Only existing matching payments are updated; no payments or access grants are created.</mdw-body>
+      <input id="kofi-csv-file" type="file" accept=".csv,text/csv" aria-label="Ko-fi transaction CSV">
+      <mdw-button id="kofi-csv-import" outlined type="button">Import missing emails</mdw-button>
+      </mdw-box>
+      <mdw-body id="kofi-csv-status" role="status"></mdw-body>
       <ul id="kofi-entries-list"></ul>
       <mdw-button id="kofi-entries-more" outlined type="button" hidden>Load older entries</mdw-button>
     </mdw-box></mdw-details></mdw-card></section>

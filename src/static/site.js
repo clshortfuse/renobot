@@ -137,6 +137,30 @@ async function loadSession() {
     }
     if (!response.ok) throw new Error('Session unavailable');
     const session = await response.json();
+    if (page === 'modder-kofi') {
+      const button = /** @type {HTMLButtonElement} */ (document.getElementById('kofi-csv-import'));
+      button?.addEventListener?.('click', () => {
+        if (button.disabled) return;
+        const file = /** @type {HTMLInputElement} */ (element('kofi-csv-file')).files?.[0];
+        const status = element('kofi-csv-status');
+        if (!file || file.size > 2 * 1024 * 1024) {
+          status.textContent = 'Select a Ko-fi CSV no larger than 2 MB.'; return;
+        }
+        button.disabled = true;
+        void (async () => {
+          try {
+            const response = await fetch('/app/api/modder/kofi/import', { method: 'POST', credentials: 'same-origin',
+              headers: { 'Content-Type': 'text/csv', 'X-CSRF-Token': session.csrf }, body: await file.text() });
+            const result = await response.json();
+            status.textContent = response.ok
+              ? `${result.emailsUpdated} emails repaired; ${result.unchanged} unchanged; ${result.unmatched} unmatched transactions skipped.`
+              : result.error;
+            if (response.ok) document.dispatchEvent(new Event('kofi-emails-repaired'));
+          } catch { status.textContent = 'Import unavailable. Try again.'; }
+          finally { button.disabled = false; }
+        })();
+      });
+    }
     if (page !== 'app' && document.getElementById('portal-navigation')) {
       try {
         const accessResponse = await fetch('/app/api/capabilities', { credentials: 'same-origin', cache: 'no-store' });
@@ -471,9 +495,10 @@ async function loadSession() {
           if (!response.ok) throw new Error('Entries unavailable');
         /** @type {{ entries: { transactionId: string, eventType: string, amount: string, currency: string,
          *   supporterDiscordUserId: string | null, tierName: string | null, subscriptionPayment: boolean,
-         *   occurredAt: string, receivedAt: string, outcome: string }[], nextCursor: string | null }} */
-          const { entries, nextCursor } = await response.json();
+         *   occurredAt: string, receivedAt: string, outcome: string }[], nextCursor: string | null, missingEmailCount: number }} */
+          const { entries, nextCursor, missingEmailCount } = await response.json();
           if (version !== entriesVersion) return;
+          element('kofi-csv-repair').hidden = !(missingEmailCount > 0);
           const list = element('kofi-entries-list');
           const items = entries.map((entry) => {
             const item = document.createElement('li');
@@ -530,6 +555,7 @@ async function loadSession() {
       element('kofi-memberships-more').addEventListener('click', () => { void loadMemberships(false); });
       element('kofi-memberships-refresh').addEventListener('click', () => { void loadMemberships(); });
       element('kofi-entries-more').addEventListener('click', () => { void loadEntries(false); });
+      document.addEventListener?.('kofi-emails-repaired', () => { void loadEntries(); });
       status.textContent = '';
       form.addEventListener('submit', (event) => {
         event.preventDefault();

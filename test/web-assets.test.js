@@ -321,7 +321,7 @@ describe('static portal assets', () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'kofi-form', 'minimum-amount', 'currency',
       'floor-note', 'token-status', 'forward-status', 'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status',
-      'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more',
+      'kofi-csv-repair', 'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more',
       'kofi-memberships', 'kofi-memberships-status', 'kofi-memberships-list', 'kofi-memberships-more', 'kofi-memberships-refresh']
       .map((id) => [id, { hidden: true, value: '' }]));
     nodes['kofi-form'] = { hidden: true, addEventListener() {} };
@@ -373,10 +373,10 @@ describe('static portal assets', () => {
           ? { entries: [{ occurredAt: '2026-09-27T12:00:00Z', receivedAt: '2026-09-27T12:00:01Z',
             eventType: 'Donation', transactionId: 'older-tx',
             amount: '1.00', currency: 'USD', supporterDiscordUserId: null, tierName: null,
-            subscriptionPayment: false, outcome: 'recorded-no-entitlement' }], nextCursor: null }
+            subscriptionPayment: false, outcome: 'recorded-no-entitlement' }], nextCursor: null, missingEmailCount: 0 }
           : { entries: [{ occurredAt: '2026-09-28T12:00:00Z', receivedAt: '2026-09-28T12:00:01Z', eventType: '<script>',
             transactionId: 'tx-1', amount: '5.00', currency: 'USD', supporterDiscordUserId: null,
-            tierName: null, subscriptionPayment: true, outcome: 'recorded-no-entitlement' }], nextCursor: 'older-id' }
+            tierName: null, subscriptionPayment: true, outcome: 'recorded-no-entitlement' }], nextCursor: 'older-id', missingEmailCount: 1 }
           : { minimumAmount: '5.00', currency: 'USD', floor: '5.00',
           hasVerificationToken: true, hasForwardUrl: true,
           prodUrl: 'https://renobot.example/prod/kofi/private-id', lastWebhookAt: null } }),
@@ -405,12 +405,14 @@ describe('static portal assets', () => {
     assert.match(rendered[0]?.textContent ?? '', /<script>.*5\.00 USD.*No linked Discord account/u);
     assert.match(rendered[0]?.textContent ?? '', /Transaction tx-1.*Recurring/u);
     assert.equal(nodes['kofi-entries-status'].textContent, 'Entries shown: 1');
+    assert.equal(nodes['kofi-csv-repair'].hidden, false);
     assert.ok(loadOlder);
     loadOlder();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(rendered.length, 2);
     assert.match(rendered[1]?.textContent ?? '', /Donation.*1\.00 USD/u);
     assert.equal(nodes['kofi-entries-status'].textContent, 'Entries shown: 2');
+    assert.equal(nodes['kofi-csv-repair'].hidden, true);
     assert.equal(nodes['kofi-entries-more'].hidden, true);
     assert.match(modderKofiPage, /Keep your existing webhook/u);
     assert.match(modderKofiPage, /<mdw-card outlined><mdw-details id="kofi-setup">/u);
@@ -443,7 +445,7 @@ describe('static portal assets', () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['settings-status', 'minimum-amount', 'currency', 'floor-note',
       'token-status', 'forward-status',
-      'verification-token', 'forward-action', 'forward-url', 'save-settings',
+      'verification-token', 'forward-action', 'forward-url', 'save-settings', 'kofi-csv-repair',
       'kofi-prod', 'kofi-prod-url', 'kofi-role-status', 'kofi-webhook-status', 'kofi-entries', 'kofi-entries-status', 'kofi-entries-list', 'kofi-entries-more',
       'kofi-memberships', 'kofi-memberships-status', 'kofi-memberships-list', 'kofi-memberships-more', 'kofi-memberships-refresh']
       .map((id) => [id, { value: '', hidden: true, disabled: false }]));

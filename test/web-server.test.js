@@ -71,6 +71,32 @@ async function beginLogin(baseUrl, returnTo) {
 }
 
 describe('dashboard routes', () => {
+  it('restricts CSV email repair to the authorized session with CSRF and bounded input', async () => {
+    /** @type {string[]} */
+    const calls = [];
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      getIntegration: async () => ({ id: 'own' }),
+      importKofiCsv: async (/** @type {string} */ id) => { calls.push(id); return { emailsUpdated: 1, unmatched: 0, unchanged: 0 }; },
+    }));
+    const bot = /** @type {import('discord.js').Client} */ (/** @type {unknown} */ ({
+      guilds: { fetch: async () => ({ members: { fetch: async () => ({ roles: { cache: new Map() } }) } }) },
+    }));
+    const base = await startServer({ database, bot,
+      settingsConfig: { key: Buffer.alloc(32, 7), minimumAmount: '5.00', currency: 'USD' } });
+    const path = `${base}/app/api/modder/kofi/import?userId=other`;
+    const token = createSession({ id: 'owner', username: 'owner' }, secret);
+    const headers = { Cookie: `renobot_session=${token}`, 'Content-Type': 'text/csv', 'X-CSRF-Token': csrfToken(token, secret) };
+    const body = 'DateTime (UTC),Received,Given,Currency,TransactionType,TransactionId,BuyerEmail\n09/01/2026 15:51,5.00,0,USD,Tip,tx,email@example.test';
+    assert.equal((await fetch(path, { method: 'POST', body })).status, 401);
+    assert.equal((await fetch(path, { method: 'POST', headers: { ...headers, 'X-CSRF-Token': 'wrong' }, body })).status, 403);
+    const member = createSession({ id: 'member', username: 'member' }, secret);
+    assert.equal((await fetch(path, { method: 'POST', headers: { ...headers, Cookie: `renobot_session=${member}` }, body })).status, 403);
+    assert.equal((await fetch(path, { method: 'POST', headers, body: 'invalid' })).status, 400);
+    assert.equal((await fetch(path, { method: 'POST', headers, body: 'a'.repeat(2 * 1024 * 1024 + 1) })).status, 413);
+    assert.deepEqual(calls, []);
+    assert.equal((await fetch(path, { method: 'POST', headers, body })).status, 200);
+    assert.deepEqual(calls, ['owner']);
+  });
   it('requests email only on demand and trusts only Discord-verified addresses', async () => {
     /** @type {string[][]} */
     const linked = [];

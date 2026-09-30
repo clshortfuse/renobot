@@ -38,9 +38,30 @@ describe('SQLite migrations and repositories', () => {
       for (const days of [60, 2]) {
         const occurredAt = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
         const payload = { ...membership, verification_token: 'secret', message_id: randomUUID(),
+          kofi_transaction_id: randomUUID(),
           timestamp: occurredAt.toISOString(), discord_userid: null, email, amount: '5.00' };
         assert.equal(await receiveKofiReceipt(database, key, integration.endpointId,
-          new URLSearchParams({ data: JSON.stringify(payload) }).toString(), undefined, '5.00'), 'accepted');
+          new URLSearchParams({ data: JSON.stringify({ ...payload, email: undefined }) }).toString(), undefined, '5.00'), 'accepted');
+        const original = await client.kofiEvent.findFirstOrThrow({ where: { integrationId: integration.id, messageId: payload.message_id } });
+        assert.equal(original.supporterEmail, null);
+        assert.equal((await database.listKofiEntries(owner.id)).missingEmailCount, 1);
+        assert.equal((await database.listKofiEntries(supporter.id)).missingEmailCount, 0);
+        const repair = { transactionId: original.transactionId, amount: '5.00', currency: 'USD',
+          occurredAt: new Date(Math.floor(original.occurredAt.getTime() / 60_000) * 60_000),
+          eventType: original.eventType, subscriptionPayment: original.subscriptionPayment, supporterEmail: email };
+        await assert.rejects(database.importKofiCsv(supporter.id, [repair]));
+        await assert.rejects(database.importKofiCsv(owner.id, [repair, { ...repair, amount: '10000.00' }]));
+        assert.equal((await client.kofiEvent.findUniqueOrThrow({ where: { id: original.id } })).supporterEmail, null);
+        assert.deepEqual(await database.importKofiCsv(owner.id, [repair, { ...repair, transactionId: randomUUID() }]),
+          { unmatched: 1, emailsUpdated: 1, unchanged: 0 });
+        const recovered = await client.kofiEvent.findUniqueOrThrow({ where: { id: original.id } });
+        assert.equal(recovered.supporterEmail, email);
+        assert.equal((await database.listKofiEntries(owner.id)).missingEmailCount, 0);
+        assert.equal(recovered.supporterDiscordUserId, null);
+        assert.equal(recovered.receivedAt.getTime(), original.receivedAt.getTime());
+        assert.deepEqual(await database.importKofiCsv(owner.id, [repair]), { unmatched: 0, emailsUpdated: 0, unchanged: 1 });
+        await assert.rejects(database.importKofiCsv(owner.id, [{ ...repair, supporterEmail: 'different@example.test' }]));
+        assert.equal((await client.kofiEvent.findUniqueOrThrow({ where: { id: original.id } })).supporterEmail, email);
         assert.equal((await database.supporterAccount(supporter.id)).entries.length, days === 60 ? 0 : 1);
         assert.deepEqual(await database.linkEmailPayments(supporter.id), { linked: 1, more: false });
         const leases = await database.activeSupporterLeases(supporter.id, new Date());
@@ -504,7 +525,7 @@ describe('SQLite migrations and repositories', () => {
       const first = await repository.listKofiEntries(owner.id);
       assert.equal(first.entries.length, 50);
       assert.ok(first.nextCursor);
-      assert.deepEqual(await repository.listKofiEntries(other.id, first.nextCursor), { entries: [], nextCursor: null });
+      assert.deepEqual(await repository.listKofiEntries(other.id, first.nextCursor), { entries: [], nextCursor: null, missingEmailCount: 0 });
       const second = await repository.listKofiEntries(owner.id, first.nextCursor);
       assert.equal(second.entries.length, 50);
       assert.ok(second.nextCursor);

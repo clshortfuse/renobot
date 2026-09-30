@@ -10,6 +10,12 @@ Verification by emailed link, SMTP setup, and arbitrary-address verification are
 
 Linking is attribution-only and preserves original receipt dates. It does not create Early Access credits, balances, or periods, create subscription entitlements, or queue any role changes. Historical crediting and retroactive role application remain separate owner-controlled actions. Existing live-payment behavior is unchanged.
 
+## Recovering previously discarded receipt emails
+
+Modders can upload their Ko-fi transaction CSV under Payment history to fill missing emails on their own existing receipts. Transaction ID, amount, currency, type, subscription flag, and payment minute must match. Unknown transactions are skipped; existing emails cannot be replaced. A conflict rolls back the entire import. CSV email attribution is supplied by the modder, not independently verified with Ko-fi.
+
+Imports accept up to 500 received tips or monthly tips in a file no larger than 2 MB. Original receipt dates, amounts, and Discord attribution are preserved. No receipts, credits, entitlements, or role work are created. Supporters must still explicitly find their payments using a verified email. Names, messages, and unrelated export fields are discarded.
+
 ## Storage and deployment
 
 Deploy the `20260929030000_verified_account_emails` migration before running the updated application. This creates account email ownership records and adds an optional payer email to payment receipts. No production migration is applied by development tests.

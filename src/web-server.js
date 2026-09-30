@@ -7,6 +7,7 @@ import { requiredCapability, resolveCapabilities } from './web-capabilities.js';
 import { MissingVerificationTokenError } from './database.js';
 import { maxKofiBodyBytes, receiveKofiReceipt } from './kofi-ingestion.js';
 import { parseModderSettings } from './modder-settings.js';
+import { parseKofiCsv } from './kofi-csv.js';
 import { createOAuthState, createSession, csrfToken, oauthReturnTo, readCookie, readSession, safeAppPath, secureCookie, verifyCsrfToken, verifyOAuthState } from './web-session.js';
 
 const stateCookie = 'renobot_oauth_state';
@@ -316,6 +317,7 @@ export function createWebServer(options) {
         return;
       }
       if ((url.pathname === '/app/api/modder/kofi' && (incoming.method === 'GET' || incoming.method === 'POST'))
+        || (url.pathname === '/app/api/modder/kofi/import' && incoming.method === 'POST')
         || (['/app/api/modder/kofi/events', '/app/api/modder/kofi/entries',
           '/app/api/modder/kofi/memberships'].includes(url.pathname) && incoming.method === 'GET')
         || (incoming.method === 'GET' && url.pathname.startsWith('/app/api/modder/kofi/memberships/'))) {
@@ -338,6 +340,25 @@ export function createWebServer(options) {
         }
         if (!options.database || !options.settingsConfig) {
           sendJson(response, 503, { error: 'Settings are not configured' });
+          return;
+        }
+        if (url.pathname === '/app/api/modder/kofi/import') {
+          if (!incoming.headers['content-type']?.startsWith('text/csv')) {
+            sendJson(response, 415, { error: 'Upload a CSV file' }); return;
+          }
+          const csrf = incoming.headers['x-csrf-token'];
+          if (typeof csrf !== 'string' || !verifyCsrfToken(csrf, token ?? '', options.config.sessionSecret)) {
+            sendJson(response, 403, { error: 'Invalid CSRF token' }); return;
+          }
+          if (!await options.database.getIntegration(session.id)) {
+            sendJson(response, 409, { error: 'Configure your Ko-fi connection first' }); return;
+          }
+          const text = (await readBody(incoming, 2 * 1024 * 1024)).toString();
+          try {
+            sendJson(response, 200, await options.database.importKofiCsv(session.id, parseKofiCsv(text)));
+          } catch {
+            sendJson(response, 400, { error: 'CSV could not be imported. Check the export and existing payment details. No changes saved.' });
+          }
           return;
         }
         if (url.pathname.startsWith('/app/api/modder/kofi/memberships/')) {
@@ -398,14 +419,14 @@ export function createWebServer(options) {
             sendJson(response, 400, { error: 'Invalid entry cursor' });
             return;
           }
-          const { entries, nextCursor } = await options.database.listKofiEntries(session.id, before);
+          const { entries, nextCursor, missingEmailCount = 0 } = await options.database.listKofiEntries(session.id, before);
           sendJson(response, 200, { entries: entries.map((entry) => ({ id: entry.id,
             messageId: entry.messageId, transactionId: entry.transactionId,
             eventType: entry.eventType, amount: entry.amount.toFixed(2), currency: entry.currency,
             subscriptionPayment: entry.subscriptionPayment, firstSubscriptionPayment: entry.firstSubscriptionPayment,
             supporterDiscordUserId: entry.supporterDiscordUserId, tierName: entry.tierName,
             occurredAt: entry.occurredAt.toISOString(), receivedAt: entry.receivedAt.toISOString(),
-            outcome: entry.outcome })), nextCursor });
+            outcome: entry.outcome })), nextCursor, missingEmailCount });
           return;
         }
         if (url.pathname === '/app/api/modder/kofi/events') {
