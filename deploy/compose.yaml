@@ -10,6 +10,11 @@ services:
       HTTP_PORT: 3000
       NODE_ENV: production
       KOFI_ENCRYPTION_KEY: ${KOFI_ENCRYPTION_KEY:-}
+      SMTP_HOST: mail.renodx.com
+      SMTP_PORT: "587"
+      SMTP_USER: noreply@renodx.com
+      SMTP_FROM: noreply@renodx.com
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?Set the production SMTP_PASSWORD secret}
     ports:
       - 127.0.0.1:3000:3000
     volumes:

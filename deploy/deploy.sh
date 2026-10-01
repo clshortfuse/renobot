@@ -8,7 +8,7 @@ fi
 
 cd /opt/renobot
 new_image=$1
-unset KOFI_ENCRYPTION_KEY
+unset KOFI_ENCRYPTION_KEY SMTP_PASSWORD
 if ! IFS= read -r kofi_key || [[ -z "$kofi_key" ]]; then
   echo 'A Ko-fi encryption key must be supplied on stdin.' >&2
   exit 2
@@ -18,15 +18,23 @@ if [[ ! "$kofi_key" =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
   echo 'Ko-fi encryption key must encode exactly 32 bytes.' >&2
   exit 2
 fi
+if ! IFS= read -r smtp_password || [[ ! "$smtp_password" =~ ^[[:xdigit:]]{64}$ ]]; then
+  echo 'The provisioned SMTP password (64 hexadecimal characters) must be supplied on the second stdin line.' >&2
+  exit 2
+fi
 previous_image=$(sed -n 's/^RENOBOT_IMAGE=//p' .deploy.env 2>/dev/null || true)
 previous_key=$(sed -n 's/^KOFI_ENCRYPTION_KEY=//p' .deploy.env 2>/dev/null || true)
+previous_smtp_password=$(sed -n 's/^SMTP_PASSWORD=//p' .deploy.env 2>/dev/null || true)
+# Older deployments predate SMTP. Retain the newly provisioned credential when
+# rolling back to such an image; older application code ignores SMTP settings.
+previous_smtp_password=${previous_smtp_password:-$smtp_password}
 if [[ -z "$previous_key" ]]; then
   previous_key=$(sed -n 's/^KOFI_ENCRYPTION_KEY=//p' /etc/renobot/renobot.env 2>/dev/null || true)
 fi
 (
   umask 077
-  printf 'RENOBOT_IMAGE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
-    "$new_image" "$kofi_key" > .deploy.env.next
+  printf 'RENOBOT_IMAGE=%s\nKOFI_ENCRYPTION_KEY=%s\nSMTP_PASSWORD=%s\n' \
+    "$new_image" "$kofi_key" "$smtp_password" > .deploy.env.next
   chmod 600 .deploy.env.next
 )
 docker compose --env-file .deploy.env.next -f compose.yaml pull app
@@ -112,8 +120,8 @@ rm -f /opt/renobot/public.next
 if [[ -n "$previous_image" ]]; then
   (
     umask 077
-    printf 'RENOBOT_IMAGE=%s\nKOFI_ENCRYPTION_KEY=%s\n' \
-      "$previous_image" "$previous_key" > .deploy.env
+    printf 'RENOBOT_IMAGE=%s\nKOFI_ENCRYPTION_KEY=%s\nSMTP_PASSWORD=%s\n' \
+      "$previous_image" "$previous_key" "$previous_smtp_password" > .deploy.env
     chmod 600 .deploy.env
   )
   docker compose --env-file .deploy.env -f compose.yaml up -d --no-deps --wait app

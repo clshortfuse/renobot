@@ -109,9 +109,14 @@ jobs:
         env:
           IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
           KOFI_ENCRYPTION_KEY: ${{ secrets.KOFI_ENCRYPTION_KEY }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
           if [[ -z "$KOFI_ENCRYPTION_KEY" ]]; then
             echo 'The production KOFI_ENCRYPTION_KEY environment secret is required.' >&2
             exit 2
           fi
-          printf '%s\n' "$KOFI_ENCRYPTION_KEY" | ssh production /opt/renobot/deploy.sh "$IMAGE"
+          if [[ -z "$SMTP_PASSWORD" ]]; then
+            echo 'The production SMTP_PASSWORD environment secret is required.' >&2
+            exit 2
+          fi
+          printf '%s\n%s\n' "$KOFI_ENCRYPTION_KEY" "$SMTP_PASSWORD" | ssh production /opt/renobot/deploy.sh "$IMAGE"
