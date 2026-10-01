@@ -16,8 +16,23 @@ model Account {
   lastLoginAt       DateTime       @map("last_login_at")
   kofiIntegration   KofiIntegration?
   emails            AccountEmail[]
+  emailVerifications EmailVerification[]
 
   @@map("account")
+}
+
+model EmailVerification {
+  tokenHash String @id @map("token_hash")
+  accountId String @map("account_id")
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  email String
+  createdAt DateTime @map("created_at")
+  expiresAt DateTime @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+
+  @@index([accountId, createdAt], map: "email_verification_account_created_idx")
+  @@index([email, createdAt], map: "email_verification_email_created_idx")
+  @@map("email_verification")
 }
 
 model AccountEmail {

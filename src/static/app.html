@@ -45,7 +45,12 @@
             <mdw-button outlined href="/auth/discord?email=1">Add Discord Email</mdw-button>
             <mdw-button id="account-check-payments" disabled>Find my payments</mdw-button>
           </mdw-box>
-          <mdw-body size="small" ink="on-surface-variant">Other email verification methods are not available yet.</mdw-body>
+          <form id="account-email-form" hidden>
+            <mdw-input outlined label="Additional Ko-fi email" id="account-email-input" name="email" type="email" required maxlength="254" autocomplete="email"></mdw-input>
+            <mdw-button id="account-email-send" type="submit">Send verification link</mdw-button>
+          </form>
+          <mdw-button id="account-email-confirm" hidden>Confirm payment email</mdw-button>
+          <mdw-body id="account-email-status" role="status"></mdw-body>
           <mdw-body id="account-status" role="status">Loading your account…</mdw-body>
         </mdw-box></mdw-card>
         <mdw-card outlined><mdw-box padding="24" gap="12">

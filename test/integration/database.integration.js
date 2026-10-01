@@ -24,6 +24,44 @@ after(async () => { await client.$disconnect(); });
 function discordId() { return `10${randomInt(10000000, 100000000)}${randomInt(10000000, 100000000)}`; }
 
 describe('SQLite migrations and repositories', () => {
+  it('binds email challenges to accounts, limits retries, expires links and never transfers ownership', async () => {
+    const database = createPortalDatabase(client);
+    const first = discordId();
+    const second = discordId();
+    const email = `${randomUUID()}@example.com`;
+    const now = new Date();
+    const later = new Date(now.getTime() + 61_000);
+    await database.saveLogin({ id: first, username: 'first' });
+    await database.saveLogin({ id: second, username: 'second' });
+    try {
+      assert.equal(await database.requestEmailVerification(first, email, 'old', now), true);
+      assert.equal(await database.requestEmailVerification(first, email, 'cooldown', now), false);
+      assert.equal(await database.consumeEmailVerification(second, 'old', now), false);
+      assert.equal(await database.requestEmailVerification(first, email, 'new', later), true);
+      assert.equal(await database.consumeEmailVerification(first, 'old', later), false);
+      assert.equal(await database.requestEmailVerification(second, email, 'competing', later), true);
+      assert.equal(await database.consumeEmailVerification(first, 'new', later), true);
+      assert.equal(await database.consumeEmailVerification(first, 'new', later), false);
+      assert.equal(await database.consumeEmailVerification(second, 'competing', later), false);
+      assert.equal(await database.requestEmailVerification(second, email, 'conflict', later), false);
+      assert.equal(await database.verifyDiscordEmail(second, email), false);
+      assert.equal((await database.supporterAccount(first)).emails[0]?.verifiedBy, 'email');
+      const expiredEmail = `${randomUUID()}@example.com`;
+      const next = new Date(later.getTime() + 61_000);
+      assert.equal(await database.requestEmailVerification(first, expiredEmail, 'expired', next), true);
+      assert.equal(await database.consumeEmailVerification(first, 'expired', new Date(next.getTime() + 1_800_000)), false);
+      await database.cancelEmailVerification('expired', next);
+      assert.equal(await database.consumeEmailVerification(first, 'expired', next), false);
+      for (let index = 0; index < 2; index++) {
+        assert.equal(await database.requestEmailVerification(first, `${randomUUID()}@example.com`, `limit-${index}`,
+          new Date(next.getTime() + (index + 1) * 61_000)), true);
+      }
+      assert.equal(await database.requestEmailVerification(first, `${randomUUID()}@example.com`, 'limited',
+        new Date(next.getTime() + 3 * 61_000)), false);
+    } finally {
+      await client.account.deleteMany({ where: { discordUserId: { in: [first, second] } } });
+    }
+  });
   it('reviews assigned email-less supporters and converts five small donations cumulatively', async () => {
     const database = createPortalDatabase(client, async (source) => {
       if (source === 'XYZ') throw new Error('Rate unavailable');
@@ -761,7 +799,7 @@ describe('SQLite migrations and repositories', () => {
     assert.deepEqual(new Set(/** @type {{migration_name: string}[]} */ (rows).map((row) => row.migration_name)),
       new Set(['20260928000000_sqlite_portal', '20260929000000_managed_supporter_role',
         '20260929010000_kofi_delivery_source', '20260929020000_early_access_periods',
-        '20260929030000_verified_account_emails', '20260929040000_credit_currency_conversion']));
+        '20260929030000_verified_account_emails', '20260929040000_credit_currency_conversion', '20261001000000_email_verification']));
     const id = discordId();
     const database = await connectPortalDatabase(url);
     assert.ok(database);

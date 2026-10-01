@@ -1,4 +1,6 @@
 import { createServer } from 'node:http';
+import { createHash, randomBytes } from 'node:crypto';
+import { normalizeEmail } from './account-email.js';
 import { isIP } from 'node:net';
 import { DiscordAPIError } from 'discord.js';
 
@@ -37,6 +39,7 @@ function deliverySource(incoming, trustedProxyIp) {
  *   trustedKofiProxyIp?: string,
  *   logger: import('pino').Logger,
  *   request?: typeof fetch,
+ *   sendVerificationEmail?: (email: string, link: string) => Promise<void>,
  * }>} options
  */
 export function createWebServer(options) {
@@ -93,6 +96,50 @@ export function createWebServer(options) {
         sendText(response, 404, 'Not found');
         return;
       }
+      if (incoming.method === 'POST' && ['/app/api/account/emails/request', '/app/api/account/emails/confirm'].includes(url.pathname)) {
+        const token = readCookie(incoming.headers.cookie, sessionCookie);
+        const session = readSession(token, options.config.sessionSecret);
+        if (!session) { sendJson(response, 401, { error: 'Sign-in required' }); return; }
+        if (!options.database) { sendJson(response, 503, { error: 'Please try again later' }); return; }
+        if (!incoming.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) {
+          sendJson(response, 415, { error: 'Unsupported content type' }); return;
+        }
+        const body = await readForm(incoming, 4096);
+        if (!verifyCsrfToken(body.get('csrf') ?? '', token ?? '', options.config.sessionSecret)) {
+          sendJson(response, 403, { error: 'Invalid CSRF token' }); return;
+        }
+        const confirming = url.pathname.endsWith('/confirm');
+        const field = confirming ? 'token' : 'email';
+        if ([...body.keys()].some((key) => !['csrf', field].includes(key) || body.getAll(key).length !== 1)) {
+          sendJson(response, 400, { error: 'Invalid request' }); return;
+        }
+        const unavailable = 'This email cannot be linked to your account. If you believe this is an error, contact support.';
+        if (confirming) {
+          const supplied = body.get('token') ?? '';
+          if (!/^[A-Za-z0-9_-]{43}$/u.test(supplied)
+            || !await options.database.consumeEmailVerification(session.id, createHash('sha256').update(supplied).digest('hex'), new Date())) {
+            sendJson(response, 400, { error: 'This link is invalid, expired, or cannot be used with this account. Contact support if needed.' }); return;
+          }
+          sendJson(response, 200, { verified: true }); return;
+        }
+        if (!options.sendVerificationEmail) { sendJson(response, 503, { error: 'Email verification is unavailable.' }); return; }
+        const email = normalizeEmail(body.get('email') ?? '');
+        if (!email) { sendJson(response, 400, { error: 'Enter a valid email address.' }); return; }
+        const verificationToken = randomBytes(32).toString('base64url');
+        const tokenHash = createHash('sha256').update(verificationToken).digest('hex');
+        if (!await options.database.requestEmailVerification(session.id, email, tokenHash, new Date())) {
+          sendJson(response, 409, { error: unavailable }); return;
+        }
+        const link = new URL('/app', options.config.publicBaseUrl);
+        link.hash = new URLSearchParams({ verifyEmail: verificationToken }).toString();
+        try { await options.sendVerificationEmail(email, link.href); }
+        catch {
+          await options.database.cancelEmailVerification(tokenHash, new Date());
+          options.logger.warn('Payment email verification delivery failed');
+          sendJson(response, 503, { error: 'Could not send verification email. Please try again later.' }); return;
+        }
+        sendJson(response, 200, { sent: true }); return;
+      }
       if ((incoming.method === 'GET' && url.pathname === '/app/api/account')
         || (incoming.method === 'POST' && url.pathname === '/app/api/account/link-payments')) {
         const token = readCookie(incoming.headers.cookie, sessionCookie);
@@ -118,6 +165,7 @@ export function createWebServer(options) {
         const roleManaged = options.earlyAccessRoleId
           ? await options.database.hasManagedSupporterRole(session.id, options.earlyAccessRoleId) : false;
         sendJson(response, 200, {
+          emailVerificationEnabled: Boolean(options.sendVerificationEmail),
           emails: account.emails.map(({ email, verifiedBy, verifiedAt }) => ({ email, verifiedBy, verifiedAt })),
           earlyAccess: { enabled: Boolean(options.earlyAccessRoleId), totalAmount: account.balance?.totalAmount.toFixed(2) ?? '0.00',
             creditedMonths: account.balance?.creditedMonths ?? 0, expiresAt: account.balance?.expiresAt ?? null,

@@ -46,6 +46,46 @@ function element(id) {
 
 /** @param {string} csrf */
 async function loadSupporterAccount(csrf) {
+  const emailStatus = element('account-email-status');
+  const emailForm = /** @type {HTMLFormElement} */ (element('account-email-form'));
+  const confirm = /** @type {HTMLButtonElement} */ (element('account-email-confirm'));
+  const pendingToken = sessionStorage.getItem('renobot-email-verification');
+  confirm.hidden = !pendingToken;
+  if (pendingToken) emailStatus.textContent = 'Confirm this payment email for the Discord account shown above.';
+  emailForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const button = /** @type {HTMLButtonElement} */ (element('account-email-send'));
+    if (button.disabled) return;
+    button.disabled = true;
+    void (async () => {
+      try {
+        const response = await fetch('/app/api/account/emails/request', { method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf,
+            email: (/** @type {HTMLInputElement} */ (element('account-email-input'))).value }) });
+        const result = await response.json();
+        emailStatus.textContent = response.ok ? 'Check your inbox. The link expires in 30 minutes. Sign in with this same Discord account to confirm.' : result.error;
+      } catch { emailStatus.textContent = 'Email verification is temporarily unavailable.'; }
+      finally { button.disabled = false; }
+    })();
+  });
+  confirm.addEventListener('click', () => {
+    if (!pendingToken || confirm.disabled) return;
+    confirm.disabled = true;
+    void (async () => {
+      try {
+        const response = await fetch('/app/api/account/emails/confirm', { method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf, token: pendingToken }) });
+        const result = await response.json();
+        if (response.ok) {
+          sessionStorage.removeItem('renobot-email-verification');
+          confirm.hidden = true;
+          await load(true);
+          emailStatus.textContent = 'Email verified. Select Find my payments to link unassigned Ko-fi receipts.';
+        } else emailStatus.textContent = result.error;
+      } catch { emailStatus.textContent = 'Could not confirm your email. Please try again.'; }
+      finally { confirm.disabled = false; }
+    })();
+  });
   const status = element('account-status');
   const check = /** @type {HTMLButtonElement} */ (element('account-check-payments'));
   const more = /** @type {HTMLButtonElement} */ (element('account-payments-more'));
@@ -62,8 +102,9 @@ async function loadSupporterAccount(csrf) {
       { credentials: 'same-origin', cache: 'no-store' });
     if (current !== version) return;
     if (!response.ok) throw new Error('Account unavailable');
-    /** @type {{ emails: {email: string, verifiedBy: string}[], earlyAccess: { enabled: boolean, expiresAt: string | null, creditedMonths: number, roleManaged: boolean }, entries: {recipient: string, amount: string, currency: string, receivedAt: string, eventType: string, transactionId: string, outcome: string}[], nextCursor: string | null }} */
+    /** @type {{ emailVerificationEnabled: boolean, emails: {email: string, verifiedBy: string}[], earlyAccess: { enabled: boolean, expiresAt: string | null, creditedMonths: number, roleManaged: boolean }, entries: {recipient: string, amount: string, currency: string, receivedAt: string, eventType: string, transactionId: string, outcome: string}[], nextCursor: string | null }} */
     const result = await response.json();
+    emailForm.hidden = !result.emailVerificationEnabled;
     if (current !== version) return;
     (/** @type {HTMLElement & {patch: (state: object) => void}} */ (element('account-emails'))).patch({
       emails: result.emails.map((email) => ({ ...email, label: email.verifiedBy === 'discord' ? 'Verified with Discord' : 'Verified email' })),
@@ -115,6 +156,13 @@ async function loadSupporterAccount(csrf) {
 
 async function loadSession() {
   const page = document.body.dataset.page;
+  if (page === 'app' && location.hash) {
+    const verification = new URLSearchParams(location.hash.slice(1)).get('verifyEmail');
+    if (verification && /^[A-Za-z0-9_-]{43}$/u.test(verification)) {
+      sessionStorage.setItem('renobot-email-verification', verification);
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  }
   try {
     const response = await fetch('/auth/session', { credentials: 'same-origin', cache: 'no-store' });
     if (response.status === 401) {

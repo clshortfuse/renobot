@@ -14,6 +14,9 @@ export class MissingVerificationTokenError extends Error {}
  * @typedef {Readonly<{
  *   saveLogin: (user: { id: string, username: string }) => Promise<void>,
  *   verifyDiscordEmail: (discordUserId: string, email: string) => Promise<boolean>,
+ *   requestEmailVerification: (discordUserId: string, email: string, tokenHash: string, now: Date) => Promise<boolean>,
+ *   consumeEmailVerification: (discordUserId: string, tokenHash: string, now: Date) => Promise<boolean>,
+ *   cancelEmailVerification: (tokenHash: string, now: Date) => Promise<void>,
  *   supporterAccount: (discordUserId: string, before?: string) => Promise<{ emails: import('@prisma/client').AccountEmail[], balance: import('@prisma/client').EarlyAccessBalance | null, entries: (import('@prisma/client').KofiEvent & { integration: { account: { lastKnownUsername: string } } })[], nextCursor: string | null }>,
  *   linkEmailPayments: (discordUserId: string) => Promise<{ linked: number, more: boolean }>,
  *   importKofiCsv: (discordUserId: string, payments: import('./kofi-csv.js').CsvPayment[]) => Promise<{ unmatched: number, emailsUpdated: number, unchanged: number }>,
@@ -151,6 +154,49 @@ async function rebuildEarlyAccessPeriods(tx, discordUserId) {
 /** @param {import('@prisma/client').PrismaClient} client @returns {PortalDatabase} */
 export function createPortalDatabase(client, exchangeRate = historicalExchangeRate) {
   return {
+    async requestEmailVerification(discordUserId, email, tokenHash, now) {
+      const normalized = normalizeEmail(email);
+      if (!normalized) return false;
+      return client.$transaction(async (tx) => {
+        const account = await tx.account.findUniqueOrThrow({ where: { discordUserId }, select: { id: true } });
+        if (await tx.accountEmail.findUnique({ where: { email: normalized } })) return false;
+        await tx.emailVerification.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - 86_400_000) } } });
+        const since = new Date(now.getTime() - 3_600_000);
+        const recent = { createdAt: { gt: since } };
+        if (await tx.emailVerification.count({ where: { ...recent, accountId: account.id } }) >= 5
+          || await tx.emailVerification.count({ where: { ...recent, email: normalized } }) >= 5
+          || await tx.emailVerification.count({ where: recent }) >= 100
+          || await tx.emailVerification.count({ where: { accountId: account.id,
+            createdAt: { gt: new Date(now.getTime() - 60_000) } } })) return false;
+        await tx.emailVerification.updateMany({ where: { accountId: account.id, email: normalized, consumedAt: null },
+          data: { consumedAt: now } });
+        await tx.emailVerification.create({ data: { tokenHash, accountId: account.id, email: normalized,
+          createdAt: now, expiresAt: new Date(now.getTime() + 30 * 60_000) } });
+        return true;
+      });
+    },
+    async cancelEmailVerification(tokenHash, now) {
+      await client.emailVerification.updateMany({ where: { tokenHash, consumedAt: null }, data: { consumedAt: now } });
+    },
+    async consumeEmailVerification(discordUserId, tokenHash, now) {
+      try {
+        return await client.$transaction(async (tx) => {
+          const challenge = await tx.emailVerification.findFirst({ where: { tokenHash,
+            account: { discordUserId }, consumedAt: null, expiresAt: { gt: now } } });
+          if (!challenge) return false;
+          const owner = await tx.accountEmail.findUnique({ where: { email: challenge.email } });
+          const changed = await tx.emailVerification.updateMany({ where: { tokenHash, consumedAt: null,
+            expiresAt: { gt: now } }, data: { consumedAt: now } });
+          if (!changed.count || owner && owner.accountId !== challenge.accountId) return false;
+          if (!owner) await tx.accountEmail.create({ data: { accountId: challenge.accountId,
+            email: challenge.email, verifiedBy: 'email', verifiedAt: now } });
+          return true;
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return false;
+        throw error;
+      }
+    },
     async saveLogin({ id, username }) {
       const now = new Date();
       await client.account.upsert({

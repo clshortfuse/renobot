@@ -1,0 +1,13 @@
+# Additional Ko-fi email addresses
+
+Signed-in Discord users can add multiple payment emails from the account page. A 30-minute link proves access to the mailbox; confirmation also requires the initiating Discord account and a CSRF-protected POST. Opening the link does not consume it. Tokens are random, stored only as SHA-256 digests, and placed in the URL fragment rather than server request URLs. The browser holds the pending token in session storage across Discord sign-in, removing it after successful confirmation.
+
+Normalized addresses remain globally unique. No existing email ownership or assigned payment is transferred. Conflicts use generic support messaging. Transfers/recovery require owner review outside this flow. Requesting another link invalidates previous links for that account/address. Limits: one request per account per minute, five per account/address per hour, 100 total per hour. Failed sends still count. Request records are pruned after 24 hours when new requests arrive.
+
+After verification, select **Find my payments** to match unassigned retained-email receipts in existing bounded batches. This does not credit access or grant roles; owner review remains separate. No provider dot/plus alias rewriting is performed.
+
+## Deployment
+
+Apply the email-verification migration and install locked dependencies. Configure `SMTP_HOST`, `SMTP_PORT` (587 with required STARTTLS, or 465 with implicit TLS), `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` in the private application environment. Production sender is `noreply@renodx.com`, host `mail.renodx.com`. Move its credential into the application environment server-side without printing it. Do not commit credentials. Without SMTP configuration, the additional-email form stays hidden; Discord verification remains available.
+
+Deploy only reviewed email changes. The paused regional-currency migration and runtime changes are not part of this feature. Before production rollout, exercise a real verification link with an authorized recipient and confirm inbox delivery, expiry, replay rejection and wrong-account rejection.

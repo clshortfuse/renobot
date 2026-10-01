@@ -6,10 +6,44 @@ import { describe, it } from 'node:test';
 import { adminEarlyAccessPage, adminKofiPage, appPage, errorPage, homePage, materialJs, modderKofiPage, notFoundPage, siteCss, siteJs } from '../src/web-assets.js';
 
 describe('static portal assets', () => {
+  it('requests an additional email and confirms explicitly before clearing its pending token', async () => {
+    /** @type {Record<string, any>} */
+    const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
+      'account-emails', 'account-early-access', 'account-payments', 'account-payments-status',
+      'account-email-status', 'account-email-form', 'account-email-confirm', 'account-email-send', 'account-email-input'].map((id) => [id,
+      { hidden: true, disabled: false, value: 'payment@example.com', listeners: /** @type {Record<string, Function>} */ ({}),
+        addEventListener(/** @type {string} */ type, /** @type {Function} */ callback) { this.listeners[type] = callback; }, patch() {} }]));
+    let pending = 'a'.repeat(43);
+    /** @type {{path: string, body: URLSearchParams}[]} */
+    const calls = [];
+    await runInNewContext(siteJs.replace('void loadSession();', "loadSupporterAccount('csrf-value');"), {
+      document: { getElementById: (/** @type {string} */ id) => nodes[id] }, URLSearchParams,
+      sessionStorage: { getItem: () => pending, removeItem: () => { pending = ''; } },
+      fetch: async (/** @type {string} */ path, /** @type {{body?: URLSearchParams}} */ options) => {
+        if (options.body) calls.push({ path, body: options.body });
+        return { ok: true, json: async () => options.body ? { verified: true, sent: true } : {
+          emailVerificationEnabled: true, emails: [], earlyAccess: { enabled: false }, entries: [], nextCursor: null,
+        } };
+      },
+    });
+    assert.equal(calls.length, 0);
+    assert.equal(nodes['account-email-form'].hidden, false);
+    nodes['account-email-form'].listeners.submit({ preventDefault() {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls[0]?.body.get('email'), 'payment@example.com');
+    assert.equal(calls[0]?.body.get('csrf'), 'csrf-value');
+    nodes['account-email-confirm'].listeners.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls[1]?.body.get('token'), 'a'.repeat(43));
+    assert.equal(pending, '');
+    assert.equal(nodes['account-email-confirm'].hidden, true);
+    assert.match(nodes['account-email-status'].textContent, /Email verified/u);
+  });
   it('ignores an older payment page after matching refreshes the account', async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
-      'account-emails', 'account-early-access', 'account-payments', 'account-payments-status'].map((id) => [id,
+      'account-emails', 'account-early-access', 'account-payments', 'account-payments-status',
+      'account-email-status', 'account-email-form', 'account-email-confirm'].map((id) => [id,
       { hidden: true, disabled: true, state: {}, listeners: /** @type {Record<string, Function>} */ ({}),
         addEventListener(/** @type {string} */ type, /** @type {Function} */ callback) { this.listeners[type] = callback; },
         patch(/** @type {object} */ state) { Object.assign(this.state, state); } }]));
@@ -28,6 +62,7 @@ describe('static portal assets', () => {
     const calls = [];
     await runInNewContext(siteJs.replace('void loadSession();', "loadSupporterAccount('csrf-value');"), {
       document: { getElementById: (/** @type {string} */ id) => nodes[id] }, URLSearchParams,
+      sessionStorage: { getItem: () => null },
       fetch: async (/** @type {string} */ path) => {
         calls.push(path);
         if (path.includes('?before=initial')) return older;
@@ -51,12 +86,14 @@ describe('static portal assets', () => {
   it(`shows personal payments with recorded grant status ${roleManaged}`, async () => {
     /** @type {Record<string, any>} */
     const nodes = Object.fromEntries(['account-status', 'account-check-payments', 'account-payments-more',
-      'account-emails', 'account-early-access', 'account-payments', 'account-payments-status'].map((id) => [id,
+      'account-emails', 'account-early-access', 'account-payments', 'account-payments-status',
+      'account-email-status', 'account-email-form', 'account-email-confirm'].map((id) => [id,
       { hidden: true, disabled: true, state: {}, addEventListener() {}, patch(/** @type {object} */ state) { Object.assign(this.state, state); } }]));
     /** @type {string[]} */
     const calls = [];
     await runInNewContext(siteJs.replace('void loadSession();', "loadSupporterAccount('csrf-value');"), {
       document: { getElementById: (/** @type {string} */ id) => nodes[id] },
+      sessionStorage: { getItem: () => null },
       fetch: async (/** @type {string} */ path) => {
         calls.push(path);
         return { ok: true, json: async () => ({ emails: [
@@ -147,6 +184,7 @@ describe('static portal assets', () => {
       'admin-early-access-link': { hidden: true }, 'portal-navigation': { hidden: true }, csrf: {}, 'sign-out': { disabled: true },
     };
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
+      location: { hash: '' },
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
         ? { username: '<img onerror=alert(1)>', ready: true, owner: true, csrf: 'csrf-value' }
@@ -168,6 +206,7 @@ describe('static portal assets', () => {
     const elements = Object.fromEntries(['username', 'connection', 'csrf', 'sign-out', 'owner-badge',
       'modder-badge', 'reviewer-badge', 'kofi-link', 'admin-kofi-link', 'admin-early-access-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
+      location: { hash: '' },
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
       fetch: async (/** @type {string} */ path) => ({ ok: true, json: async () => path === '/auth/session'
         ? { username: 'visitor', ready: true, csrf: 'token' }
@@ -187,6 +226,7 @@ describe('static portal assets', () => {
     const elements = Object.fromEntries(['username', 'connection', 'csrf', 'sign-out', 'owner-badge',
       'modder-badge', 'reviewer-badge', 'kofi-link', 'admin-kofi-link', 'portal-navigation', 'access-status'].map((id) => [id, { hidden: true }]));
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
+      location: { hash: '' },
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
       fetch: async (/** @type {string} */ path) => path === '/auth/session'
         ? { ok: true, json: async () => ({ username: 'owner', ready: true, owner: true, csrf: 'token' }) }
@@ -215,6 +255,7 @@ describe('static portal assets', () => {
     /** @type {Record<string, { textContent?: string, disabled?: boolean }>} */
     const elements = { username: {}, connection: {}, 'sign-out': { disabled: true } };
     await runInNewContext(siteJs.replace('void loadSession();', 'loadSession();'), {
+      location: { hash: '' },
       document: { body: { dataset: { page: 'app' } }, getElementById: (/** @type {string} */ id) => elements[id] },
       fetch: async () => { throw new Error('Unavailable'); },
     });

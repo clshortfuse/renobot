@@ -34,6 +34,7 @@ afterEach(async () => {
  * @param {Readonly<{ ready?: boolean, request?: typeof fetch, bot?: import('discord.js').Client,
  *   config?: import('../src/web-config.js').WebConfig, database?: import('../src/database.js').PortalDatabase,
  *   settingsConfig?: import('../src/modder-settings.js').ModderSettingsConfig,
+ *   sendVerificationEmail?: (email: string, link: string) => Promise<void>,
  *   trustedKofiProxyIp?: string, supporterRoleId?: string, earlyAccessRoleId?: string }>} [options]
  */
 async function startServer(options = {}) {
@@ -43,6 +44,7 @@ async function startServer(options = {}) {
     config: options.config ?? config,
     logger: /** @type {import('pino').Logger} */ (/** @type {unknown} */ (logger)),
     ...(options.request ? { request: options.request } : {}),
+    ...(options.sendVerificationEmail ? { sendVerificationEmail: options.sendVerificationEmail } : {}),
     ...(options.database ? { database: options.database } : {}),
     ...(options.settingsConfig ? { settingsConfig: options.settingsConfig } : {}),
     ...(options.trustedKofiProxyIp ? { trustedKofiProxyIp: options.trustedKofiProxyIp } : {}),
@@ -71,6 +73,54 @@ async function beginLogin(baseUrl, returnTo) {
 }
 
 describe('dashboard routes', () => {
+  it('protects payment email requests and confirms only hashed tokens for the current session', async () => {
+    /** @type {string[][]} */
+    const calls = [];
+    let allowed = true;
+    let failedSend = false;
+    const database = /** @type {import('../src/database.js').PortalDatabase} */ (/** @type {unknown} */ ({
+      requestEmailVerification: async (/** @type {string} */ id, /** @type {string} */ email, /** @type {string} */ hash) => {
+        calls.push(['request', id, email, hash]); return allowed;
+      },
+      consumeEmailVerification: async (/** @type {string} */ id, /** @type {string} */ hash) => {
+        calls.push(['confirm', id, hash]); return true;
+      },
+      cancelEmailVerification: async (/** @type {string} */ hash) => { calls.push(['cancel', hash]); },
+    }));
+    const base = await startServer({ database, sendVerificationEmail: async (email, link) => {
+      if (failedSend) throw new Error('secret SMTP failure');
+      calls.push(['send', email, link]);
+    } });
+    const session = createSession({ id: 'member', username: 'member' }, secret);
+    const post = (/** @type {string} */ path, /** @type {Record<string, string>} */ fields, cookie = session) => fetch(`${base}${path}`, {
+      method: 'POST', headers: { Cookie: `renobot_session=${cookie}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields) });
+    const path = '/app/api/account/emails/request';
+    const fields = { csrf: csrfToken(session, secret), email: ' Test@Example.com ' };
+    assert.equal((await post(path, fields, '')).status, 401);
+    assert.equal((await post(path, { ...fields, csrf: 'bad' })).status, 403);
+    assert.equal(calls.length, 0);
+    assert.equal((await post(path, fields)).status, 200);
+    assert.equal(calls[0]?.[1], 'member');
+    assert.equal(calls[0]?.[2], 'test@example.com');
+    assert.match(calls[0]?.[3] ?? '', /^[a-f0-9]{64}$/u);
+    const link = new URL(calls[1]?.[2] ?? '');
+    assert.equal(link.origin, config.publicBaseUrl.origin);
+    assert.equal(link.search, '');
+    const token = new URLSearchParams(link.hash.slice(1)).get('verifyEmail') ?? '';
+    assert.equal(token.length, 43);
+    assert.equal((await post('/app/api/account/emails/confirm', { csrf: fields.csrf, token })).status, 200);
+    assert.equal(calls[2]?.[2], calls[0]?.[3]);
+    allowed = false;
+    assert.equal((await post(path, fields)).status, 409);
+    assert.equal(calls.filter((call) => call[0] === 'send').length, 1);
+    allowed = true;
+    failedSend = true;
+    const failed = await post(path, fields);
+    assert.equal(failed.status, 503);
+    assert.doesNotMatch(await failed.text(), /secret/u);
+    assert.equal(calls.at(-1)?.[0], 'cancel');
+  });
   it('requires owner and CSRF for separate account linking and crediting actions', async () => {
     /** @type {string[][]} */
     const calls = [];

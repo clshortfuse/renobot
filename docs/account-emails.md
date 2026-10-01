@@ -4,7 +4,7 @@ Every signed-in user can view their recorded Ko-fi payments and Early Access sta
 
 An account can own multiple verified email addresses. Under **Verified Emails**, **Add Discord Email** requests optional Discord email permission and adds only the address Discord marks as verified. It never replaces existing addresses. Re-authorizing after changing your verified Discord email can add another address. An address already owned by another Renobot account is not transferred.
 
-Verification by emailed link, SMTP setup, and arbitrary-address verification are not implemented yet. There is no endpoint accepting an address supplied by the browser as verified.
+When SMTP is configured, users can also enter an additional payment email and request a verification link. Confirmation requires mailbox access and sign-in with the same Discord account that requested it. Links expire in 30 minutes and can be used once. Requests never transfer existing ownership. Conflicts display a generic support message; recovery remains owner-reviewed. See [payment email verification](payment-email-verification.md) for configuration and limits. No endpoint accepts a browser-supplied address as already verified.
 
 **Find my payments** checks all verified addresses and attaches matching unassigned receipts to the signed-in Discord user. Payments already linked to that Discord ID are always visible, even without a verified email. Payments linked to someone else are never reassigned. Matching is explicit and can be repeated safely; it processes batches of 50 receipts.
 
@@ -19,6 +19,8 @@ Imports accept up to 500 received tips or monthly tips in a file no larger than 
 ## Storage and deployment
 
 Deploy the `20260929030000_verified_account_emails` migration before running the updated application. This creates account email ownership records and adds an optional payer email to payment receipts. No production migration is applied by development tests.
+
+Additional email verification also requires `20261001000000_email_verification` and private SMTP configuration. Do not include the separately paused regional-currency changes in this rollout.
 
 Emails are private personal data stored in SQLite and its backups. Restrict database and backup access. Payment APIs do not expose payer email or network diagnostics to supporters; account email lists are visible only to their signed-in owner. OAuth email values are not placed in the session cookie.
 

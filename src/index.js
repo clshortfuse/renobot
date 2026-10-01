@@ -10,6 +10,7 @@ import { startEarlyAccessRoleWorker, startSupporterRoleWorker } from './supporte
 import { createReviewCollectionPreview } from './reviews/collection-preview.js';
 import { readWebConfig } from './web-config.js';
 import { createWebServer } from './web-server.js';
+import { createVerificationMailer, readMailConfig } from './verification-mail.js';
 
 /** @type {import('./database.js').PortalDatabase | undefined} */
 let database;
@@ -31,6 +32,8 @@ try {
     reviewCollection,
   });
   const webConfig = readWebConfig();
+  const mailConfig = readMailConfig();
+  if (mailConfig && (!webConfig || !database)) throw new Error('Email verification requires the dashboard and database.');
   const settingsConfig = readModderSettingsConfig();
   if (settingsConfig && !database) throw new Error('Modder settings require DATABASE_URL.');
   const supporterRoleId = process.env.DISCORD_SUPPORTER_ROLE_ID?.trim();
@@ -45,6 +48,7 @@ try {
     throw new Error('DISCORD_EARLY_ACCESS_ROLE_ID requires a distinct Discord role ID and Ko-fi database settings.');
   }
   const webServer = webConfig ? createWebServer({ bot: client, config: webConfig, logger,
+    ...(mailConfig ? { sendVerificationEmail: createVerificationMailer(mailConfig) } : {}),
     ...(database ? { database } : {}), ...(settingsConfig ? { settingsConfig } : {}),
     ...(supporterRoleId ? { supporterRoleId } : {}),
     ...(earlyAccessRoleId ? { earlyAccessRoleId } : {}),
