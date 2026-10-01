@@ -58,8 +58,24 @@ describe('public static deployment', () => {
   it('deploys the image and encryption key without an environment test-mode switch', () => {
     assert.match(workflow, /environment: production/u);
     assert.doesNotMatch(workflow + deploy + compose, /KOFI_TEST_MODE/u);
-    assert.match(workflow, /printf '%s\\n' "\$KOFI_ENCRYPTION_KEY" \| ssh production \/opt\/renobot\/deploy\.sh "\$IMAGE"/u);
-    assert.match(deploy, /"\$previous_image" "\$previous_key" > \.deploy\.env\s+chmod 600 \.deploy\.env/u);
+    assert.match(workflow, /printf '%s\\n%s\\n' "\$KOFI_ENCRYPTION_KEY" "\$SMTP_PASSWORD" \| ssh production \/opt\/renobot\/deploy\.sh "\$IMAGE"/u);
+    assert.match(deploy, /"\$previous_image" "\$previous_key" "\$previous_smtp_password" > \.deploy\.env\s+chmod 600 \.deploy\.env/u);
+  });
+
+  it('supplies SMTP credentials privately and preserves them on rollback', () => {
+    assert.match(workflow, /SMTP_PASSWORD: \$\{\{ secrets\.SMTP_PASSWORD \}\}/u);
+    assert.match(workflow, /if \[\[ -z "\$SMTP_PASSWORD" \]\]/u);
+    assert.match(deploy, /unset KOFI_ENCRYPTION_KEY SMTP_PASSWORD/u);
+    assert.match(deploy, /IFS= read -r smtp_password/u);
+    assert.ok(deploy.includes('"$smtp_password" =~ ^[[:xdigit:]]{64}$'));
+    assert.ok(deploy.indexOf('read -r smtp_password') < deploy.indexOf('pull app'));
+    assert.match(deploy, /SMTP_PASSWORD=%s\\n/u);
+    assert.match(deploy, /"\$new_image" "\$kofi_key" "\$smtp_password" > \.deploy\.env\.next/u);
+    assert.ok(deploy.includes('previous_smtp_password=${previous_smtp_password:-$smtp_password}'));
+    assert.match(compose, /SMTP_PASSWORD: \$\{SMTP_PASSWORD:\?Set the production SMTP_PASSWORD secret\}/u);
+    assert.match(compose, /SMTP_HOST: mail\.renodx\.com/u);
+    assert.match(compose, /SMTP_PORT: "587"/u);
+    assert.doesNotMatch(workflow, /ssh production .*\$SMTP_PASSWORD/u);
   });
 
   it('supplies the GitHub Ko-fi secret privately and guards against losing encrypted settings', () => {
