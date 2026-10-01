@@ -1,0 +1,46 @@
+services:
+  mailserver:
+    image: ${MAILSERVER_IMAGE:?Set MAILSERVER_IMAGE to a reviewed digest-qualified Docker Mailserver image}
+    hostname: mail.renodx.com
+    container_name: renodx-mail
+    restart: unless-stopped
+    ports:
+      - "25:25"
+      - "587:587"
+      - "993:993"
+    environment:
+      SSL_TYPE: letsencrypt
+      ENABLE_RSPAMD: "1"
+      ENABLE_OPENDKIM: "0"
+      ENABLE_OPENDMARC: "0"
+      ENABLE_POLICYD_SPF: "0"
+      ENABLE_AMAVIS: "0"
+      ENABLE_SPAMASSASSIN: "0"
+      ENABLE_POSTGREY: "0"
+      ENABLE_CLAMAV: "0"
+      SPOOF_PROTECTION: "1"
+      PERMIT_DOCKER: none
+    volumes:
+      - /opt/mailserver/mail-data:/var/mail
+      - /opt/mailserver/mail-state:/var/mail-state
+      - /opt/mailserver/mail-logs:/var/log/mail
+      - /opt/mailserver/config:/tmp/docker-mailserver
+      # Preserve Certbot symlinks without exposing other certificates or ACME secrets.
+      - type: bind
+        source: /etc/letsencrypt/live/mail.renodx.com
+        target: /etc/letsencrypt/live/mail.renodx.com
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/letsencrypt/archive/mail.renodx.com
+        target: /etc/letsencrypt/archive/mail.renodx.com
+        read_only: true
+        bind:
+          create_host_path: false
+      - /etc/localtime:/etc/localtime:ro
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
