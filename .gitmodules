@@ -1,0 +1,3 @@
+[submodule "native/hdr-avif/libavif"]
+	path = external/libavif
+	url = https://github.com/AOMediaCodec/libavif.git

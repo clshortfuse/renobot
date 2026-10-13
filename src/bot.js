@@ -4,6 +4,7 @@ import {
   GatewayIntentBits,
   MessageFlags,
 } from 'discord.js';
+import { fixHdrMessage } from './hdr-avif.js';
 
 /**
  * @param {import('./commands/command.js').CommandContext} context
@@ -78,11 +79,27 @@ export function createBot(context) {
  * @returns {Promise<void>}
  */
 export async function handleInteraction(interaction, context) {
-  if (!interaction.isChatInputCommand()) {
+  if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand?.()) {
     return;
   }
 
   const command = context.commands.get(interaction.commandName);
+
+  if (!interaction.isChatInputCommand() && interaction.isMessageContextMenuCommand()) {
+    if (interaction.commandName !== 'Fix HDR Preview' || interaction.user.id !== context.ownerUserId
+      || interaction.guildId !== context.guildId || !context.guildId) {
+      await interaction.reply({ content: 'This command is restricted to the owner in the configured server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    try {
+      await fixHdrMessage(interaction);
+    } catch (error) {
+      context.logger.error({ err: error, interactionId: interaction.id }, 'HDR conversion failed');
+      if (interaction.deferred) await interaction.editReply('HDR conversion failed. Check the bot logs for details.');
+      else await interaction.reply({ content: 'HDR conversion failed.', flags: MessageFlags.Ephemeral });
+    }
+    return;
+  }
 
   if (command?.access === 'summarize') {
     const roles = interaction.member?.roles;

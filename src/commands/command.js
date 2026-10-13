@@ -15,7 +15,7 @@
 /**
  * @typedef {Readonly<{
  *   access?: 'thread-owner' | 'summarize',
- *   data: import('discord.js').SlashCommandBuilder |
+ *   data: import('discord.js').ContextMenuCommandBuilder | import('discord.js').SlashCommandBuilder |
  *     import('discord.js').SlashCommandOptionsOnlyBuilder |
  *     import('discord.js').SlashCommandSubcommandsOnlyBuilder,
  *   execute: (
