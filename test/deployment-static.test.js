@@ -8,6 +8,19 @@ const compose = readFileSync(new URL('../deploy/compose.yaml', import.meta.url),
 const workflow = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
 
 describe('public static deployment', () => {
+  it('builds architectures natively and merges them before deploying by digest', () => {
+    assert.match(workflow, /arch: amd64\s+runner: ubuntu-24\.04/u);
+    assert.match(workflow, /arch: arm64\s+runner: ubuntu-24\.04-arm/u);
+    assert.ok(workflow.includes('runs-on: ${{ matrix.runner }}'));
+    assert.ok(workflow.includes('platforms: linux/${{ matrix.arch }}'));
+    assert.ok(workflow.includes('cache-from: type=gha,scope=renobot-${{ matrix.arch }}'));
+    assert.ok(workflow.includes('cache-to: type=gha,mode=max,scope=renobot-${{ matrix.arch }}'));
+    assert.match(workflow, /publish:\s+needs: build-images/u);
+    assert.ok(workflow.includes('"$IMAGE:$BUILD_TAG-amd64" "$IMAGE:$BUILD_TAG-arm64"'));
+    assert.ok(workflow.includes('digest: ${{ steps.merge.outputs.digest }}'));
+    assert.ok(workflow.includes('IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}'));
+  });
+
   it('serves only known public paths directly and proxies authentication', () => {
     assert.match(nginx, /root \/opt\/renobot\/public;/u);
     for (const path of ['/', '/app', '/app/modder/kofi', '/assets/site.css', '/assets/site.js']) {

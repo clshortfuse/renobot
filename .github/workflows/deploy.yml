@@ -52,12 +52,17 @@ jobs:
       - name: Apply migrations and run SQLite integration tests
         run: npm run db:test
 
-  publish:
+  build-images:
     needs: [validate, database]
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      image: ${{ steps.image.outputs.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -75,11 +80,40 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: true
-          tags: ${{ steps.image.outputs.name }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.image.outputs.name }}:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=renobot-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=renobot-${{ matrix.arch }}
+
+  publish:
+    needs: build-images
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.merge.outputs.digest }}
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - id: merge
+        name: Publish multiarchitecture manifest
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          BUILD_TAG: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:${{ github.sha }}" \
+            "$IMAGE:$BUILD_TAG-amd64" "$IMAGE:$BUILD_TAG-arm64"
+          digest=$(docker buildx imagetools inspect "$IMAGE:${{ github.sha }}" \
+            --format '{{json .Manifest}}' | jq -er '.digest')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: publish
