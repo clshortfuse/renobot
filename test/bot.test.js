@@ -14,6 +14,28 @@ import { createBot, handleInteraction } from '../src/bot.js';
 const silentLogger = pino({ level: 'silent' });
 
 describe('interaction handling', () => {
+  it('allows non-owner HDR users in the configured guild and rejects other guilds', async () => {
+    for (const guildId of ['configured-guild', 'other-guild', null]) {
+      let deferred = false;
+      let rejected = false;
+      const interaction = asInteraction({
+        id: 'hdr-interaction',
+        commandName: 'Fix HDR Preview',
+        user: { id: 'non-owner' },
+        guildId,
+        isChatInputCommand: () => false,
+        isMessageContextMenuCommand: () => true,
+        targetMessage: { attachments: new Map() },
+        deferReply: async () => { deferred = true; },
+        editReply: async () => {},
+        reply: async () => { rejected = true; },
+      });
+      await handleInteraction(interaction, { ...createContext(), guildId: 'configured-guild' });
+      assert.equal(deferred, guildId === 'configured-guild');
+      assert.equal(rejected, guildId !== 'configured-guild');
+    }
+  });
+
   it('ignores interactions that are not chat input commands', async () => {
     let replied = false;
     const interaction = asInteraction({

@@ -86,9 +86,9 @@ export async function handleInteraction(interaction, context) {
   const command = context.commands.get(interaction.commandName);
 
   if (!interaction.isChatInputCommand() && interaction.isMessageContextMenuCommand()) {
-    if (interaction.commandName !== 'Fix HDR Preview' || interaction.user.id !== context.ownerUserId
+    if (interaction.commandName !== 'Fix HDR Preview'
       || interaction.guildId !== context.guildId || !context.guildId) {
-      await interaction.reply({ content: 'This command is restricted to the owner in the configured server.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'This command is restricted to the configured server.', flags: MessageFlags.Ephemeral });
       return;
     }
     try {
