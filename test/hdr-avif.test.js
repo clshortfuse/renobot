@@ -5,7 +5,43 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { convertHdrPng, convertHdrPngBytes, hdrReplyOptions, inspectHdrPng } from '../src/hdr-avif.js';
-import { buildHdrProfile } from '../src/hdr-profile.js';
+
+/** @param {Buffer} avif */
+function assertHdrProfile(avif) {
+  const marker = avif.indexOf(Buffer.from('colrprof'));
+  assert.ok(marker >= 4);
+  const profile = avif.subarray(marker + 8, marker - 4 + avif.readUInt32BE(marker - 4));
+  assert.equal(profile.readUInt32BE(0), profile.length);
+  assert.equal(profile.toString('ascii', 36, 40), 'acsp');
+  const tags = new Map();
+  for (let i = 0; i < profile.readUInt32BE(128); i++) {
+    const entry = 132 + i * 12;
+    const offset = profile.readUInt32BE(entry + 4);
+    const size = profile.readUInt32BE(entry + 8);
+    assert.ok(offset + size <= profile.length);
+    tags.set(profile.toString('ascii', entry, entry + 4), profile.subarray(offset, offset + size));
+  }
+  assert.deepEqual(tags.get('cicp').subarray(8), Buffer.from([9, 16, 0, 1]));
+  assert.equal(tags.get('lumi').readInt32BE(12) / 65536, 203);
+  const whiteY = ['rXYZ', 'gXYZ', 'bXYZ'].reduce((sum, tag) =>
+    sum + tags.get(tag).readInt32BE(12) / 65536, 0);
+  assert.ok(Math.abs(whiteY - 1) < 0.00002);
+  const curve = tags.get('rTRC');
+  assert.deepEqual(tags.get('gTRC'), curve);
+  assert.deepEqual(tags.get('bTRC'), curve);
+  assert.equal(curve.readUInt32BE(8), 4096);
+  assert.equal(curve.readUInt16BE(12), 0);
+  assert.equal(curve.readUInt16BE(12 + 4095 * 2), 65535);
+  let previous = 0;
+  for (let i = 0; i < 4096; i++) {
+    const value = curve.readUInt16BE(12 + i * 2);
+    assert.ok(value >= previous);
+    previous = value;
+  }
+  // ST 2084 encodes 203 cd/m² at approximately 0.580689.
+  const diffuseWhite = curve.readUInt16BE(12 + Math.round(0.580688881 * 4095) * 2);
+  assert.ok(Math.abs(diffuseWhite / 65535 * 10000 - 203) < 0.5);
+}
 
 /** @param {string} type @param {Buffer} data */
 function chunk(type, data) {
@@ -88,7 +124,7 @@ test('native converter supports one-pixel-wide and one-pixel-high PNGs',
         await writeFile(input, png);
         const result = await convertHdrPng(input, output);
         assert.equal(result.bytes.toString('ascii', 4, 8), 'ftyp');
-        assert.ok(result.bytes.includes(buildHdrProfile()));
+        assertHdrProfile(result.bytes);
         const piped = await convertHdrPngBytes(png);
         assert.deepEqual(piped.bytes, result.bytes);
         assert.match(piped.timings, /decode_ms=.*convert_encode_ms=/);
@@ -119,7 +155,7 @@ test('native bot converter embeds ICC and refuses to overwrite output',
       await writeFile(input, png);
       const result = await convertHdrPng(input, output);
       assert.equal(result.bytes.toString('ascii', 4, 8), 'ftyp');
-      assert.ok(result.bytes.includes(buildHdrProfile()));
+      assertHdrProfile(result.bytes);
       assert.match(result.timings, /decode_ms=.*convert_encode_ms=/);
       assert.ok(result.milliseconds > 0);
       const piped = await convertHdrPngBytes(png);

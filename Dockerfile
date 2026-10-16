@@ -3,9 +3,6 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates git cmake ninja-build build-essential nasm perl
 COPY native/hdr-avif /build/native/hdr-avif
 COPY external/libavif /build/external/libavif
-COPY scripts/generate-hdr-profile.js /build/scripts/generate-hdr-profile.js
-COPY src/hdr-profile.js /build/src/hdr-profile.js
-COPY package.json /build/package.json
 RUN cmake -S /build/native/hdr-avif -B /build/output -G Ninja -DCMAKE_BUILD_TYPE=Release \
 	&& cmake --build /build/output --target renobot_hdr --parallel 2 \
 	&& mkdir -p /opt/hdr/bin \
