@@ -172,7 +172,7 @@ export function createScamOcr({ spawn = createScamOcrProcess, cooldownMs = 30_00
 
 /**
  * @param {{guildId: string, channelId: string, logger: import('pino').Logger,
- * send: (alert: {message: import('discord.js').Message, reason: string, image: Buffer | undefined}) => Promise<unknown>,
+ * send: (alert: {message: import('discord.js').Message, observedAt: number, reason: string, image: Buffer | undefined}) => Promise<unknown>,
  * ocr?: ReturnType<typeof createScamOcr>, download?: typeof downloadScamImage}} options
  */
 export function createScamDetector({ guildId, channelId, logger, send, ocr = createScamOcr(), download = downloadScamImage }) {
@@ -186,6 +186,7 @@ export function createScamDetector({ guildId, channelId, logger, send, ocr = cre
   return {
     /** @param {import('discord.js').Message} message */
     enqueue(message) {
+      const observedAt = Date.now();
       if (closed || message.guildId !== guildId || message.channelId === channelId
         || message.author.bot || message.webhookId || seen.has(message.id)) return Promise.resolve();
       const attachments = [...message.attachments.values(),
@@ -236,7 +237,7 @@ export function createScamDetector({ guildId, channelId, logger, send, ocr = cre
           if (finding) {
             logger.info({ messageId: message.id, authorId: message.author.id, hashes, images: finding.images,
               reason: finding.reason }, 'Scam evidence detected');
-            await send({ message, reason: finding.reason, image: evidenceImage });
+            await send({ message, observedAt, reason: finding.reason, image: evidenceImage });
             break;
           }
         }

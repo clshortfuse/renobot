@@ -13,11 +13,13 @@ const userId = '148572660886929409';
 function fixture() {
   const state = { banned: false, banPermission: true, actorPermission: true, botPermission: true, hierarchy: true,
     missingMember: false, deleted: false, banCount: 0, deleteCount: 0, forwards: 0, forwardFails: true, forwardError: 50013,
-    editFails: false, banDuringForward: false, actorId: 'moderator', banReason: '', auditPermission: true };
+    editFails: false, uploadFails: false, banDuringForward: false, actorId: 'moderator', banReason: '', auditPermission: true };
   /** @type {Collection<string, {targetId: string, executorId: string | null, reason: string | null, action: number, createdTimestamp?: number}>} */
   const auditEntries = new Collection();
   /** @type {import('discord.js').MessageCreateOptions[]} */
   const sent = [];
+  /** @type {import('discord.js').MessageEditOptions[]} */
+  const edited = [];
   /** @type {(string | import('discord.js').InteractionEditReplyOptions)[]} */
   const replies = [];
   /** @type {import('discord.js').APIContainerComponent} */
@@ -28,11 +30,25 @@ function fixture() {
     assert.ok(component);
     const json = 'toJSON' in component ? component.toJSON() : component;
     assert.equal(json.type, ComponentType.Container);
-    card = /** @type {import('discord.js').APIContainerComponent} */ (json);
+    card = structuredClone(/** @type {import('discord.js').APIContainerComponent} */ (json));
+    /** @type {{id?: number}[]} */
+    const components = [card, ...card.components, ...card.components.flatMap(item => item.type === ComponentType.ActionRow ? item.components : [])];
+    const explicit = components.map(item => item.id).filter(id => id !== undefined && id !== 0);
+    assert.equal(new Set(explicit).size, explicit.length, 'Discord requires unique component IDs');
+    const used = new Set(explicit);
+    let next = 1;
+    for (const item of components) {
+      if (item.id) continue;
+      while (used.has(next)) next++;
+      item.id = next;
+      used.add(next++);
+    }
   }
   const alert = { id: 'alert', guildId, author: { id: 'bot' }, get components() { return [{ toJSON: () => card }]; },
     async edit(/** @type {import('discord.js').MessageEditOptions} */ payload) {
       if (state.editFails) throw new Error('Alert unavailable');
+      if (state.uploadFails && payload.files?.length) throw new Error('Attachment upload failed');
+      edited.push(payload);
       capture(payload);
       return alert;
     } };
@@ -41,7 +57,7 @@ function fixture() {
   const bot = { id: 'bot', permissions: { has: () => state.botPermission }, permissionsIn: () => ({ has: () => state.botPermission }) };
   const source = { id: channelId, isTextBased: () => true, messages: { fetch: async () => {
     if (state.deleted) throw { code: 10008 };
-    return { author: { id: userId }, delete: async () => { state.deleteCount++; state.deleted = true; } };
+    return { id: messageId, channelId, author: { id: userId }, delete: async () => { state.deleteCount++; state.deleted = true; } };
   } } };
   const guild = { id: guildId, ownerId: 'owner', channels: { fetch: async () => source },
     fetchAuditLogs: async () => {
@@ -110,7 +126,7 @@ function fixture() {
     const row = card.components.find(item => item.type === ComponentType.ActionRow);
     return row?.components.find(item => item.type === ComponentType.Button && 'label' in item && item.label === label)?.disabled;
   }
-  return { state, sent, replies, alert, guild, service, send, click, confirmation, text, auditEntries, disabled };
+  return { state, sent, edited, replies, alert, guild, message, service, send, click, confirmation, text, auditEntries, disabled };
 }
 
 test('single V2 card orders identity, evidence, direct link and actions without redundant labels', async () => {
@@ -435,7 +451,7 @@ test('unban during audit lookup discards stale attribution', async (t) => {
   assert.equal(f.text(1), `<@${userId}> · Not banned`);
 });
 
-test('reban does not reuse an audit entry predating the observed unban', async (t) => {
+test('repeated delivery reuses the alert and preserves original ban attribution', async (t) => {
   const f = fixture(); f.state.banned = true; f.state.banReason = 'spam';
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
@@ -447,12 +463,12 @@ test('reban does not reuse an audit entry predating the observed unban', async (
   await f.service.onBan(ban, false);
   await f.service.onBan(ban);
   await f.send();
-  assert.doesNotMatch(f.text(1), /Banned by/u);
-  assert.match(f.text(1), /Banned\n-# spam/u);
+  assert.match(f.text(1), /Banned by <@1450060292716494940>/u);
   entry.createdTimestamp = now + 1;
   entry.executorId = '1450060292716494941';
   await f.send();
-  assert.match(f.text(1), /Banned by <@1450060292716494941>/u);
+  assert.match(f.text(1), /Banned by <@1450060292716494940>/u);
+  assert.equal(f.sent.length, 1);
 });
 
 test('confirmation expires without executing moderation', async (t) => {
@@ -463,4 +479,68 @@ test('confirmation expires without executing moderation', async (t) => {
   await f.click(confirmation);
   assert.equal(f.state.banCount, 0);
   assert.match(JSON.stringify(f.replies.at(-1)), /expired/u);
+});
+
+test('one source alert accumulates both reasons without losing pending controls', async () => {
+  const f = fixture();
+  await Promise.all([f.send(), f.service.send({ message: f.message, reason: 'Honeypot triggered', image: undefined })]);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.text(7), /Known scam domain/u);
+  assert.match(f.text(7), /Honeypot triggered/u);
+  await f.service.annotate(f.message, 'Auto-delete pending — 15 seconds');
+  await f.send();
+  assert.match(f.text(5), /pending/u);
+  assert.ok(f.alert.components[0]?.toJSON().components.some(c => c.id === 6));
+});
+
+test('Discord-assigned IDs preserve evidence and manual controls through automatic updates', async () => {
+  const f = fixture(); await f.send();
+  assert.ok(f.alert.components[0]);
+  const original = f.alert.components[0].toJSON().components;
+  const gallery = original.find(item => item.type === ComponentType.MediaGallery);
+  const manual = original.find(item => item.type === ComponentType.ActionRow);
+  assert.ok(gallery); assert.ok(manual);
+  await f.service.annotate(f.message, 'Auto-delete pending — 15 seconds');
+  await f.send();
+  await f.service.annotate(f.message, 'Auto-delete cancelled.');
+  assert.ok(f.alert.components[0]);
+  const updated = f.alert.components[0].toJSON().components;
+  assert.deepEqual(updated.find(item => item.type === ComponentType.MediaGallery), gallery);
+  assert.deepEqual(updated.find(item => item.type === ComponentType.ActionRow), manual);
+  assert.match(f.text(7), /Known scam domain/u);
+});
+
+test('cancel and suspend require fresh permissions and route to the bound controller', async () => {
+  const f = fixture(); let cancelled = 0, suspended = 0;
+  f.service.setAutomatic({ cancel: async id => { assert.equal(id, messageId); cancelled++; }, suspend: async () => { suspended++; } });
+  await f.send();
+  f.state.actorPermission = false;
+  await f.click('cancel'); await f.click('suspend');
+  assert.equal(cancelled, 0); assert.equal(suspended, 0);
+  f.state.actorPermission = true;
+  await f.click('cancel'); await f.click('suspend');
+  assert.equal(cancelled, 1); assert.equal(suspended, 1);
+});
+
+test('late spam evidence upgrades the existing honeypot alert without duplicating it', async () => {
+  const f = fixture();
+  await f.service.send({ message: f.message, reason: 'Honeypot activity', image: undefined });
+  assert.equal(f.text(4), 'Image unavailable');
+  await f.service.annotate(f.message, 'Auto-delete pending — 15 seconds');
+  await f.send(); await f.send();
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.edited.filter(edit => edit.files?.length).length, 1);
+  assert.equal(f.text(4), '');
+  assert.match(f.text(5), /pending/u);
+  assert.ok(f.alert.components[0]?.toJSON().components.some(c => c.id === 6));
+});
+
+test('failed optional image upgrade still merges the spam reason on the existing alert', async () => {
+  const f = fixture();
+  await f.service.send({ message: f.message, reason: 'Honeypot activity', image: undefined });
+  f.state.uploadFails = true;
+  await f.send();
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.text(4), 'Image unavailable');
+  assert.match(f.text(7), /Known scam domain/u);
 });

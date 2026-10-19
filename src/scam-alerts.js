@@ -5,6 +5,16 @@ import { ActionRowBuilder, AuditLogEvent, ButtonBuilder, ButtonStyle, ComponentT
 /** @param {unknown} error @param {number} code */
 function hasCode(error, code) { return error !== null && typeof error === 'object' && 'code' in error && error.code === code; }
 
+/** Shared by confirmed buttons and automatic alert actions.
+ * @param {import('discord.js').Message} source @param {Target} target */
+export async function deleteAlertSource(source, target) {
+  if (source.id !== target.messageId || source.channelId !== target.channelId || source.author.id !== target.userId) {
+    throw new Error('Source does not match the alert');
+  }
+  try { await source.delete(); return 'deleted'; }
+  catch (error) { if (hasCode(error, 10008)) return 'already-deleted'; throw error; }
+}
+
 /** @param {import('discord.js').Guild} guild @param {string} userId */
 async function banState(guild, userId) {
   try {
@@ -22,10 +32,11 @@ function controls(target, state, deleted = false) {
   const suffix = `${target.channelId}:${target.messageId}:${target.userId}`;
   /** @type {ActionRowBuilder<ButtonBuilder>} */
   const row = new ActionRowBuilder();
+  row.setId(10);
   return row.addComponents(
-    new ButtonBuilder().setLabel('Delete message').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setId(11).setLabel('Delete message').setStyle(ButtonStyle.Danger)
       .setCustomId(`scam:delete:${suffix}`).setDisabled(deleted),
-    new ButtonBuilder().setLabel('Ban user').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setId(12).setLabel('Ban user').setStyle(ButtonStyle.Danger)
       .setCustomId(`scam:ban:${suffix}`).setDisabled(state !== 'Not banned'),
   );
 }
@@ -37,10 +48,11 @@ export function securityCard({ target, guildId, state, reason, imageUrl, deleted
   const status = state === 'Already banned'
     ? `Banned${banDetails?.executorId ? ` by <@${banDetails.executorId}>` : ''}${banDetails?.reason ? `\n-# ${escapeMarkdown(banDetails.reason.replace(/[\r\n]/gu, ' ')).replaceAll('@', '@\u200b')}` : ''}`
     : state.startsWith('Unknown') ? 'Ban status unknown' : state;
-  return { type: ComponentType.Container, accent_color: 0xe59b38, components: [
+  // IDs 1–7 identify text/status sections and automatic controls; 8–14 are structural.
+  return { type: ComponentType.Container, id: 8, accent_color: 0xe59b38, components: [
     { type: ComponentType.TextDisplay, id: 3, content: `**${reason}**` },
     { type: ComponentType.TextDisplay, id: 1, content: `<@${target.userId}> · ${status}` },
-    ...(imageUrl ? [/** @type {import('discord.js').APIMediaGalleryComponent} */ ({ type: ComponentType.MediaGallery,
+    ...(imageUrl ? [/** @type {import('discord.js').APIMediaGalleryComponent} */ ({ type: ComponentType.MediaGallery, id: 9,
       items: [{ media: { url: imageUrl } }] })] : []),
     ...(imageUrl || forwarded ? [] : [/** @type {import('discord.js').APITextDisplayComponent} */ ({ type: ComponentType.TextDisplay, id: 4, content: 'Image unavailable' })]),
     { type: ComponentType.TextDisplay, id: 2, content: `https://discord.com/channels/${guildId}/${target.channelId}/${target.messageId}${deleted ? ' (deleted)' : ''}` },
@@ -63,6 +75,36 @@ export function createScamAlerts(client, context) {
   const banStates = new Map();
   /** @type {Map<string, Promise<void>>} */
   const edits = new Map();
+  /** @type {Map<string, Promise<unknown>>} */
+  const deliveries = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const reasons = new Map();
+  /** @type {{cancel: (id: string) => Promise<void>, suspend: () => Promise<void>} | undefined} */
+  let automatic;
+
+  /** @param {import('discord.js').Message} message @param {string} text @param {number} [section] */
+  async function annotate(message, text, section = 5) {
+    const entry = [...recent.values()].find(item => item.target.messageId === message.id && item.target.channelId === message.channelId);
+    if (!entry) throw new Error('Recent security alert unavailable');
+    const { alert, target } = entry;
+    const task = (edits.get(alert.id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      const current = recent.get(alert.id)?.alert;
+      const container = current?.components[0]?.toJSON();
+      if (!current || container?.type !== ComponentType.Container) throw new Error('Recent security alert unavailable');
+      const components = container.components.filter(item => !(item.type === ComponentType.TextDisplay && item.id === section)
+        && !(section === 5 && item.type === ComponentType.ActionRow && item.components.some(button =>
+          button.type === ComponentType.Button && 'custom_id' in button && button.custom_id.startsWith('scam:cancel:'))));
+      components.push({ type: ComponentType.TextDisplay, id: section, content: text });
+      if (section === 5 && text.startsWith('Auto-delete pending')) components.push({ type: ComponentType.ActionRow, id: 6, components: [
+        { type: ComponentType.Button, id: 13, style: ButtonStyle.Secondary, label: 'Cancel deletion', custom_id: `scam:cancel:${target.channelId}:${target.messageId}:${target.userId}` },
+        { type: ComponentType.Button, id: 14, style: ButtonStyle.Danger, label: 'Suspend auto-delete', custom_id: `scam:suspend:${target.channelId}:${target.messageId}:${target.userId}` },
+      ] });
+      const edited = await current.edit({ components: [{ ...container, components }], allowedMentions: { parse: [] } });
+      if (recent.has(alert.id)) recent.set(alert.id, { alert: edited, target });
+    });
+    edits.set(alert.id, task);
+    try { await task; } finally { if (edits.get(alert.id) === task) edits.delete(alert.id); }
+  }
 
   /** @param {string} userId @param {string} state @param {boolean} [event] */
   function rememberBanState(userId, state, event = false) {
@@ -122,7 +164,8 @@ export function createScamAlerts(client, context) {
   async function renderUpdate(alert, target, state, deleted) {
     const original = alert.components[0]?.toJSON();
     if (original?.type !== ComponentType.Container) throw new Error('Security alert is missing its card');
-    const row = original.components.find(item => item.type === ComponentType.ActionRow);
+    const row = original.components.find(item => item.type === ComponentType.ActionRow && item.components.some(button =>
+      button.type === ComponentType.Button && 'custom_id' in button && button.custom_id.startsWith('scam:delete:')));
     if (row?.type !== ComponentType.ActionRow) throw new Error('Security alert is missing its controls');
     const next = { ...original, components: original.components.map(item => item !== row ? item : {
       ...row, components: row.components.map(button => {
@@ -172,9 +215,42 @@ export function createScamAlerts(client, context) {
     return { guild, channel };
   }
 
-  return {
+  const service = {
+    annotate,
+    /** @param {{cancel: (id: string) => Promise<void>, suspend: () => Promise<void>}} controller */
+    setAutomatic(controller) { automatic = controller; },
     /** @param {{message: import('discord.js').Message, reason: string, image: Buffer | undefined}} evidence */
     async send({ message, reason, image }) {
+      const pending = deliveries.get(message.id);
+      if (pending) await pending;
+      const existing = [...recent.values()].find(item => item.target.messageId === message.id);
+      if (existing) {
+        if (image) {
+          const { alert, target } = existing;
+          const upgrade = (edits.get(alert.id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+            const current = recent.get(alert.id)?.alert;
+            const container = current?.components[0]?.toJSON();
+            if (!current || container?.type !== ComponentType.Container || !container.components.some(item => item.type === ComponentType.TextDisplay && item.id === 4 && item.content === 'Image unavailable')) return;
+            const components = container.components.map(item => item.type === ComponentType.TextDisplay && item.id === 4 && item.content === 'Image unavailable'
+              ? /** @type {import('discord.js').APIMediaGalleryComponent} */ ({ type: ComponentType.MediaGallery, id: 9,
+                items: [{ media: { url: 'attachment://evidence.png' } }] }) : item);
+            const edited = await current.edit({ components: [{ ...container, components }],
+              files: [{ attachment: image, name: 'evidence.png' }], allowedMentions: { parse: [] } });
+            if (recent.has(alert.id)) recent.set(alert.id, { alert: edited, target });
+          });
+          edits.set(alert.id, upgrade);
+          try { await upgrade; }
+          catch (error) { context.logger.warn({ err: error, alertId: alert.id }, 'Optional evidence upgrade failed'); }
+          finally { if (edits.get(alert.id) === upgrade) edits.delete(alert.id); }
+        }
+        const collected = reasons.get(message.id) ?? new Set();
+        collected.add(reason); reasons.set(message.id, collected);
+        await annotate(message, [...collected].join('\n'), 7);
+        return;
+      }
+      const delivery = Promise.withResolvers();
+      deliveries.set(message.id, delivery.promise);
+      try {
       if (!context.securityChannelId || !context.guildId) throw new Error('Security alerts are not configured');
       const channel = await client.channels.fetch(context.securityChannelId);
       if (!channel?.isSendable() || !('guildId' in channel) || channel.guildId !== context.guildId || !message.guild) {
@@ -207,12 +283,18 @@ export function createScamAlerts(client, context) {
           forwarded, imageUrl: !forwarded && image ? 'attachment://evidence.png' : undefined })],
         files: !forwarded && image ? [{ attachment: image, name: 'evidence.png' }] : [], allowedMentions: { parse: [] } });
       recent.set(alert.id, { alert, target });
-      if (recent.size > 200) recent.delete(/** @type {string} */ (recent.keys().next().value));
+      reasons.set(message.id, new Set([reason]));
+      if (recent.size > 200) {
+        const oldest = /** @type {string} */ (recent.keys().next().value);
+        reasons.delete(recent.get(oldest)?.target.messageId ?? '');
+        recent.delete(oldest);
+      }
       // A honeypot may ban the author while Discord is accepting the evidence uploads.
       try {
         const latest = await readBanState(message.guild, message.author.id);
         await update(alert, target, latest);
       } catch (error) { context.logger.warn({ err: error, alertId: alert.id }, 'Security post-delivery status check failed'); }
+      } finally { deliveries.delete(message.id); delivery.resolve(undefined); }
     },
     /** @param {import('discord.js').GuildBan} ban @param {boolean} [banned] */
     async onBan(ban, banned = true) {
@@ -230,7 +312,10 @@ export function createScamAlerts(client, context) {
     /** @param {{guildId: string | null, channelId: string, id: string}} message */
     async onDelete(message) {
       if (message.guildId !== context.guildId) return;
-      if (message.channelId === context.securityChannelId) { recent.delete(message.id); return; }
+      if (message.channelId === context.securityChannelId) {
+        reasons.delete(recent.get(message.id)?.target.messageId ?? '');
+        recent.delete(message.id); return;
+      }
       deletedMessages.add(message.id);
       if (deletedMessages.size > 1000) deletedMessages.delete(/** @type {string} */ (deletedMessages.values().next().value));
       for (const { alert, target } of recent.values()) {
@@ -250,6 +335,18 @@ export function createScamAlerts(client, context) {
         if (!context.guildId || interaction.guildId !== context.guildId || interaction.channelId !== context.securityChannelId
           || interaction.message.author.id !== client.user?.id) throw new Error('Invalid security alert context');
         const [, action, ...parts] = interaction.customId.split(':');
+        if (action === 'cancel' || action === 'suspend') {
+          const entry = recent.get(interaction.message.id);
+          if (!entry || !automatic || parts.join(':') !== `${entry.target.channelId}:${entry.target.messageId}:${entry.target.userId}`) throw new Error('Invalid automatic action target');
+          const { guild } = await authorize(interaction, entry.target, 'delete');
+          if (action === 'suspend') {
+            const actor = await guild.members.fetch({ user: interaction.user.id, force: true });
+            if (!actor.permissions.has(PermissionFlagsBits.ManageGuild)) throw new Error('Manage Server permission required to suspend automatic deletion');
+            await automatic.suspend();
+          } else await automatic.cancel(entry.target.messageId);
+          await interaction.editReply(action === 'cancel' ? 'Automatic deletion cancelled.' : 'Automatic deletion suspended until restart.');
+          return true;
+        }
         if (action === 'confirm') {
           const token = parts[0] ?? '';
           const pending = confirmations.get(token);
@@ -271,9 +368,9 @@ export function createScamAlerts(client, context) {
             }
           } else {
             try {
-              const source = await channel.messages.fetch(target.messageId);
+              const source = await channel.messages.fetch({ message: target.messageId, force: true, cache: false });
               if (source.author.id !== target.userId) throw new Error('Source author does not match the alert');
-              await source.delete();
+              await deleteAlertSource(source, target);
               result = 'Message deleted.';
             } catch (error) {
               if (!hasCode(error, 10008)) throw error;
@@ -318,4 +415,5 @@ export function createScamAlerts(client, context) {
       return true;
     },
   };
+  return service;
 }

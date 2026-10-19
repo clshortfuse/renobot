@@ -2,6 +2,7 @@ import { createBot } from './bot.js';
 import { isIP } from 'node:net';
 import { loadCommands } from './commands/load-commands.js';
 import { readBotConfig, readCommandRegistrationConfig } from './config.js';
+import { readSecurityAutodeleteConfig } from './security-autodelete.js';
 import { connectPortalDatabase } from './database.js';
 import { createShutdown, installProcessHandlers } from './lifecycle.js';
 import { logger } from './logger.js';
@@ -18,6 +19,10 @@ try {
   const config = readBotConfig();
   const guildId = readCommandRegistrationConfig().guildId;
   const securityChannelId = process.env.DISCORD_SECURITY_CHANNEL_ID?.trim() || undefined;
+  const securityAutodelete = readSecurityAutodeleteConfig();
+  if (securityAutodelete && (!securityChannelId || !guildId || securityAutodelete.channelId === securityChannelId)) {
+    throw new Error('Honeypot correlation requires guild/security configuration and a distinct honeypot channel.');
+  }
   if (securityChannelId && !/^\d{17,20}$/u.test(securityChannelId)) throw new Error('Invalid DISCORD_SECURITY_CHANNEL_ID.');
   if (securityChannelId && !config.messageContentIntent) throw new Error('Security detection requires DISCORD_MESSAGE_CONTENT_INTENT=true; unset DISCORD_SECURITY_CHANNEL_ID to disable.');
   database = await connectPortalDatabase(process.env.DATABASE_URL);
@@ -34,6 +39,7 @@ try {
     summarizeRoleId: process.env.DISCORD_SUMMARIZE_ROLE_ID?.trim(),
     guildId,
     securityChannelId,
+    securityAutodelete,
     reviewCollection,
   });
   const webConfig = readWebConfig();

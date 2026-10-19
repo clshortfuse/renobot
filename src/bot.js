@@ -8,6 +8,7 @@ import {
 import { fixHdrMessage } from './hdr-avif.js';
 import { createScamDetector } from './scam-detection.js';
 import { createScamAlerts } from './scam-alerts.js';
+import { createSecurityAutodelete } from './security-autodelete.js';
 
 /**
  * @param {import('./commands/command.js').CommandContext} context
@@ -28,8 +29,20 @@ export function createBot(context) {
   const scamAlerts = createScamAlerts(client, context);
   if (context.securityChannelId && context.guildId) {
     const channelId = context.securityChannelId;
+    const autodelete = context.securityAutodelete ? createSecurityAutodelete({ config: context.securityAutodelete,
+      guildId: context.guildId, ownerUserId: context.ownerUserId, logger: context.logger,
+      alert: (message, reason) => scamAlerts.send({ message, reason, image: undefined }),
+      annotate: scamAlerts.annotate,
+      onDelete: scamAlerts.onDelete, report: async content => {
+        const channel = await client.channels.fetch(channelId);
+        if (!channel?.isSendable() || !('guildId' in channel) || channel.guildId !== context.guildId) {
+          throw new Error('Security destination unavailable or outside the configured guild');
+        }
+        return channel.send({ content, allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
+      } }) : undefined;
+    if (autodelete) scamAlerts.setAutomatic(autodelete);
     const detector = createScamDetector({ guildId: context.guildId, channelId, logger: context.logger,
-      send: scamAlerts.send });
+      send: async evidence => { await scamAlerts.send(evidence); await autodelete?.flag(evidence); } });
     client.on(Events.GuildBanAdd, (ban) => { void scamAlerts.onBan(ban).catch((error) => {
       context.logger.error({ err: error }, 'Security ban event failed');
     }); });
@@ -42,9 +55,12 @@ export function createBot(context) {
     client.on(Events.MessageBulkDelete, (messages) => { void Promise.all([...messages.values()].map((message) => scamAlerts.onDelete(message))).catch((error) => {
       context.logger.error({ err: error }, 'Security bulk deletion event failed');
     }); });
-    client.on(Events.MessageCreate, (message) => { void detector.enqueue(message); });
+    client.on(Events.MessageCreate, (message) => {
+      void autodelete?.observe(message).catch(error => context.logger.error({ err: error }, 'Honeypot observation failed'));
+      void detector.enqueue(message);
+    });
     const destroy = client.destroy.bind(client);
-    client.destroy = async () => { await detector.close(); await destroy(); };
+    client.destroy = async () => { await autodelete?.close(); await detector.close(); await destroy(); };
   }
 
   client.once(Events.ClientReady, (readyClient) => {

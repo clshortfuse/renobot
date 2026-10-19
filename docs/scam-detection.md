@@ -58,8 +58,9 @@ when another bot (such as Honeypot) bans or unbans someone, changing buttons onl
 Single and bulk message deletion events disable Delete message,
 including uncached messages. There is no refresh button or periodic polling.
 Updates are serialized per alert so concurrent ban/deletion events preserve both
-control states. Report text, recorded attribution, evidence, and source links stay
-immutable after posting. Bounded event tracking covers deletion during OCR or alert delivery.
+control states. Original report text, recorded attribution, evidence, and source links stay
+immutable after posting. Unified reason and automatic-action status sections may
+be added or updated on that same alert. Bounded event tracking covers deletion during OCR or alert delivery.
 Tracking is in memory: alerts from before a restart or beyond the latest 200 do
 not receive automatic edits. Moderation actions still recheck current state.
 Already-banned users have a disabled Ban button.
@@ -67,8 +68,13 @@ Missing ban permissions are displayed as unknown, never treated as not banned.
 Deleting an already-deleted message or confirming an already-completed ban is safe.
 Pending confirmations expire on restart. Old plain-text alerts gain no controls.
 
-No automatic deletion, timeout, ban, historical scan, automatic domain-list
-expansion, or LLM call. Domain lists are code-reviewed. Jokes can match: moderators decide.
+Detection alone never automatically deletes messages. The optional
+[honeypot correlation policy](honeypot-autodelete.md) can schedule exact source
+messages after an independent configured-channel trigger, including recent
+same-author activity without spam classification. A unified alert has a 15-second
+countdown with cancellation controls; default mode is dry-run.
+No automatic timeout, ban, historical scan, automatic domain-list expansion,
+or LLM call. Domain lists are code-reviewed. Jokes can match: moderators decide.
 Exact hashes cache recognition, not identity across recompression. Perceptual
 hashing and independent cross-channel repetition detection are deferred.
 

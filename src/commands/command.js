@@ -8,6 +8,7 @@
  *   ownerUserId: string,
  *   guildId?: string,
  *   securityChannelId?: string | undefined,
+ *   securityAutodelete?: NonNullable<ReturnType<typeof import('../security-autodelete.js').readSecurityAutodeleteConfig>> | undefined,
  *   summarizeRoleId?: string | undefined,
  *   reviewCollection: import('../reviews/review.js').ReviewCollectionPreviewService,
  * }>} CommandContext
