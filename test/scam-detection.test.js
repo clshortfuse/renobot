@@ -155,6 +155,34 @@ test('duplicate mixed-signal images cannot corroborate themselves', async () => 
   } finally { await detector.close(); }
 });
 
+test('forwarded spam with truncated promo and reordered receipt fragments alerts', async () => {
+  const hook = 'Ce thraw the bonus immediately\nHow to claim your reward:\n1. Go tozautox.com\nne special promo cod: MONEY\n) 2 oe 3.200 bonus ply rN';
+  const proof = '|\nssfu\ni al Succe\nWithdrawal 9\n\\\n-»\ncesshul\nsuce\nvas\nwal v\nwithdrav\nYour w\nfl Receivey x\n| x 3.400,\nJy\n> cn 2p,\nR245 PW,\nS285 Thy\n$e';
+  assert.equal(detectCampaign([hook]), undefined);
+  assert.ok(detectCampaign([hook, proof]));
+  let downloads = 0, alerts = 0;
+  const detector = createScamDetector({ guildId: 'guild', channelId: 'security', logger: pino({ level: 'silent' }),
+    download: async () => Buffer.from(String(downloads++)),
+    ocr: { recognize: async bytes => bytes.toString() === '0' ? hook : proof, close: async () => {} },
+    send: async () => { alerts++; } });
+  try {
+    await detector.enqueue(message());
+    assert.equal(downloads, 2);
+    assert.equal(alerts, 1);
+  } finally { await detector.close(); }
+});
+
+test('receipt fragments require nearby withdrawal context, not bare numbers or success', () => {
+  const hook = 'How to claim your reward at offer.invalid promo cod HOT bonus';
+  assert.ok(detectCampaign([hook, 'Success Withdrawal']));
+  for (const proof of ['Success! Receivey 3.400', 'Withdrawal pending 3.400',
+    `Success ${'ordinary text '.repeat(10)} Withdrawal`, '3.400', 'succulent withdrawal']) {
+    assert.equal(detectCampaign([hook, proof]), undefined, proof);
+  }
+  assert.equal(imageSignals('promo coding tutorial').score, 0);
+  assert.equal(detectCampaign(['shop.invalid promo cod SALE', 'Success Withdrawal $50']), undefined);
+});
+
 test('non-hook first image stops before supporting downloads', async () => {
   let downloads = 0;
   const detector = createScamDetector({ guildId: 'guild', channelId: 'security', logger: pino({ level: 'silent' }),

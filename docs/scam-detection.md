@@ -60,8 +60,14 @@ Live detection and audit scans skip duplicate SHA-256 image content within each
 message. Identical normalized OCR text also cannot corroborate itself, even when
 the image bytes differ. This does not provide perceptual deduplication of all
 visually similar images.
-Withdrawal-success matching accepts bounded observed OCR fragments within 60
-characters, including `Irawal Succ`; received-payment variants include `Recey veg`.
+Receipt tuning uses the saved forwarded-sample OCR regression and negative
+examples while retaining the existing thresholds and separate-image requirement.
+Withdrawal-success matching accepts whole-token OCR fragments within 60
+characters in either order, including `Irawal Succ` and `Succe Withdrawal`.
+Received-payment variants include `Recey veg` and `Receivey`; promo instructions
+accept the truncated `promo cod`. Bare numbers still earn no monetary-amount
+point without a currency symbol. The uncertain forwarded-sample domain spelling
+is not added to the known-domain list.
 Whitespace around domain dots is normalized without substituting domain letters.
 Record scores, rule names, image positions, domains and hashes, not probabilities.
 Ignore bots, webhooks, foreign guilds and the destination channel. Include direct

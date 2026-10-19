@@ -40,10 +40,17 @@ export function imageSignals(text) {
   const payout = /(?:withdrawal|nithdrawal|rawal).{0,25}(?:suc|success)/u.test(normalized)
     && /receiv(?:ed|eg)\b/u.test(normalized) && /\$\s*\d/u.test(normalized);
   const claim = /\b(?:how to claim|claim your reward)\b/u.test(normalized);
-  const promo = /\bpromo\s*code\b/u.test(normalized);
+  const promo = /\bpromo\s*cod(?:e)?\b/u.test(normalized);
   const bonus = /\bbonus\b|giving away/u.test(normalized);
-  const receipt = /\b(?:withdrawal|withdraw|withdra|nithdrawal|rawal|irawal)\b.{0,60}\b(?:suc|succ|success\w*)\b/u.test(normalized);
-  const received = /\b(?:received|receiveg|recey\s*veg)\b/u.test(normalized);
+  // OCR can reorder lines. Require nearby, whole-token fragments in either order.
+  const withdrawalTokens = [...normalized.matchAll(/\b(?:withdrawal|withdraw|withdra|withdrav|nithdrawal|rawal|irawal)\b/gu)];
+  const successTokens = [...normalized.matchAll(/\b(?:suc|succ|succe|success|successful|successfully)\b/gu)];
+  const receipt = withdrawalTokens.some(left => successTokens.some(right => {
+    const gap = left.index < right.index ? right.index - left.index - left[0].length
+      : left.index - right.index - right[0].length;
+    return gap <= 60;
+  }));
+  const received = /\b(?:received|receiveg|receivey|recey\s*veg)\b/u.test(normalized);
   const amount = /[$£€]\s*\d/u.test(normalized);
   // Each category contributes once. Scores are evidence weights, not probabilities.
   const score = Number(domains.length > 0) + Number(claim) * 2 + Number(promo) * 2
@@ -57,7 +64,8 @@ export function imageSignals(text) {
     support: bonusPage || withdrawalPage,
     rules: [casino ? 'crypto-casino' : '', giveaway ? 'cash-bonus' : '', instructions ? 'claim-instructions' : '',
       withdrawal ? 'instant-withdrawal' : '', bonusPage ? 'bonus-activation' : '', withdrawalPage ? 'withdrawal-success' : '',
-      compressedHook ? 'claim-bonus-hook' : '', payout ? 'withdrawal-receipt' : ''].filter(Boolean) };
+      compressedHook ? 'claim-bonus-hook' : '', payout ? 'withdrawal-receipt' : '',
+      promo ? 'promo-instructions' : '', receipt ? 'receipt-fragments' : '', received ? 'received-payment' : ''].filter(Boolean) };
 }
 
 /** @param {string[]} texts */
