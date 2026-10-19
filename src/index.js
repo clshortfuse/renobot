@@ -16,6 +16,10 @@ import { createVerificationMailer, readMailConfig } from './verification-mail.js
 let database;
 try {
   const config = readBotConfig();
+  const guildId = readCommandRegistrationConfig().guildId;
+  const securityChannelId = process.env.DISCORD_SECURITY_CHANNEL_ID?.trim() || undefined;
+  if (securityChannelId && !/^\d{17,20}$/u.test(securityChannelId)) throw new Error('Invalid DISCORD_SECURITY_CHANNEL_ID.');
+  if (securityChannelId && !config.messageContentIntent) throw new Error('Security detection requires DISCORD_MESSAGE_CONTENT_INTENT=true; unset DISCORD_SECURITY_CHANNEL_ID to disable.');
   database = await connectPortalDatabase(process.env.DATABASE_URL);
   const commands = await loadCommands();
   const reviewCollection = createReviewCollectionPreview({
@@ -28,7 +32,8 @@ try {
     messageContentIntent: config.messageContentIntent,
     ownerUserId: config.ownerUserId,
     summarizeRoleId: process.env.DISCORD_SUMMARIZE_ROLE_ID?.trim(),
-    guildId: readCommandRegistrationConfig().guildId,
+    guildId,
+    securityChannelId,
     reviewCollection,
   });
   const webConfig = readWebConfig();

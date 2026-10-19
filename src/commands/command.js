@@ -7,6 +7,7 @@
  *   messageContentIntent: boolean,
  *   ownerUserId: string,
  *   guildId?: string,
+ *   securityChannelId?: string | undefined,
  *   summarizeRoleId?: string | undefined,
  *   reviewCollection: import('../reviews/review.js').ReviewCollectionPreviewService,
  * }>} CommandContext

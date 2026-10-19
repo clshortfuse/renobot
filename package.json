@@ -33,9 +33,12 @@
     "ajv-formats": "^3.0.1",
     "csv-parse": "^7.0.3",
     "discord.js": "^14.27.0",
+    "image-size": "^2.0.4",
     "nodemailer": "^10.0.13",
     "pino": "^10.3.1",
-    "prisma": "6.19.3"
+    "prisma": "6.19.3",
+    "sharp": "^0.35.5",
+    "tesseract.js": "^7.0.0"
   },
   "overrides": {
     "@prisma/config": {

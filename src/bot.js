@@ -5,6 +5,7 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { fixHdrMessage } from './hdr-avif.js';
+import { createScamDetector } from './scam-detection.js';
 
 /**
  * @param {import('./commands/command.js').CommandContext} context
@@ -14,11 +15,27 @@ export function createBot(context) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
+      ...(context.securityChannelId ? [GatewayIntentBits.GuildMessages] : []),
       ...(context.messageContentIntent
         ? [GatewayIntentBits.MessageContent]
         : []),
     ],
   });
+
+  if (context.securityChannelId && context.guildId) {
+    const channelId = context.securityChannelId;
+    const detector = createScamDetector({ guildId: context.guildId, channelId, logger: context.logger,
+      send: async (content) => {
+        const channel = await client.channels.fetch(channelId);
+        if (!channel?.isSendable() || !('guildId' in channel) || channel.guildId !== context.guildId) {
+          throw new Error('Security destination is not a sendable channel in the configured guild');
+        }
+        return channel.send({ content, allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
+      } });
+    client.on(Events.MessageCreate, (message) => { void detector.enqueue(message); });
+    const destroy = client.destroy.bind(client);
+    client.destroy = async () => { await detector.close(); await destroy(); };
+  }
 
   client.once(Events.ClientReady, (readyClient) => {
     context.logger.info(

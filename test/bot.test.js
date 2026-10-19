@@ -14,6 +14,18 @@ import { createBot, handleInteraction } from '../src/bot.js';
 const silentLogger = pino({ level: 'silent' });
 
 describe('interaction handling', () => {
+  it('requests guild message events only when security detection is configured', async () => {
+    const client = createBot({ ...createContext(), guildId: 'guild', securityChannelId: 'security', messageContentIntent: true });
+    assert.equal(client.options.intents.has(GatewayIntentBits.GuildMessages), true);
+    assert.equal(client.options.intents.has(GatewayIntentBits.MessageContent), true);
+    assert.equal(client.listenerCount(Events.MessageCreate), 1);
+    await client.destroy();
+    const disabled = createBot(createContext());
+    assert.equal(disabled.options.intents.has(GatewayIntentBits.GuildMessages), false);
+    assert.equal(disabled.listenerCount(Events.MessageCreate), 0);
+    await disabled.destroy();
+  });
+
   it('allows non-owner HDR users in the configured guild and rejects other guilds', async () => {
     for (const guildId of ['configured-guild', 'other-guild', null]) {
       let deferred = false;
