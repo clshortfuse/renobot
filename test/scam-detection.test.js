@@ -69,7 +69,7 @@ function message(overrides = {}) {
 }
 
 test('intake exclusions, deduplication, hash cache and alert evidence', async () => {
-  /** @type {string[]} */
+  /** @type {{message: import('discord.js').Message, reason: string, image: Buffer | undefined}[]} */
   const sent = [];
   let recognitions = 0;
   const detector = createScamDetector({ guildId: 'guild', channelId: 'security', logger: pino({ level: 'silent' }),
@@ -85,8 +85,9 @@ test('intake exclusions, deduplication, hash cache and alert evidence', async ()
   await detector.enqueue(message({ id: 'second' }));
   assert.equal(sent.length, 2);
   assert.equal(recognitions, 1);
-  assert.match(sent[0] ?? '', /basoowin\[\.\]com/u);
-  assert.match(sent[0] ?? '', /SHA-256: [a-f0-9]{64}/u);
+  assert.equal(sent[0]?.reason, 'Known scam domain');
+  assert.equal(sent[0]?.message.author.id, 'author');
+  assert.deepEqual(sent[0]?.image, Buffer.from('same image'));
   await detector.close();
   await detector.enqueue(message({ id: 'closed' }));
   assert.equal(sent.length, 2);

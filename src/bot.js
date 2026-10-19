@@ -3,9 +3,11 @@ import {
   Events,
   GatewayIntentBits,
   MessageFlags,
+  Partials,
 } from 'discord.js';
 import { fixHdrMessage } from './hdr-avif.js';
 import { createScamDetector } from './scam-detection.js';
+import { createScamAlerts } from './scam-alerts.js';
 
 /**
  * @param {import('./commands/command.js').CommandContext} context
@@ -13,25 +15,33 @@ import { createScamDetector } from './scam-detection.js';
  */
 export function createBot(context) {
   const client = new Client({
+    partials: context.securityChannelId ? [Partials.Message] : [],
     intents: [
       GatewayIntentBits.Guilds,
-      ...(context.securityChannelId ? [GatewayIntentBits.GuildMessages] : []),
+      ...(context.securityChannelId ? [GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildModeration] : []),
       ...(context.messageContentIntent
         ? [GatewayIntentBits.MessageContent]
         : []),
     ],
   });
 
+  const scamAlerts = createScamAlerts(client, context);
   if (context.securityChannelId && context.guildId) {
     const channelId = context.securityChannelId;
     const detector = createScamDetector({ guildId: context.guildId, channelId, logger: context.logger,
-      send: async (content) => {
-        const channel = await client.channels.fetch(channelId);
-        if (!channel?.isSendable() || !('guildId' in channel) || channel.guildId !== context.guildId) {
-          throw new Error('Security destination is not a sendable channel in the configured guild');
-        }
-        return channel.send({ content, allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
-      } });
+      send: scamAlerts.send });
+    client.on(Events.GuildBanAdd, (ban) => { void scamAlerts.onBan(ban).catch((error) => {
+      context.logger.error({ err: error }, 'Security ban event failed');
+    }); });
+    client.on(Events.GuildBanRemove, (ban) => { void scamAlerts.onBan(ban, false).catch((error) => {
+      context.logger.error({ err: error }, 'Security unban event failed');
+    }); });
+    client.on(Events.MessageDelete, (message) => { void scamAlerts.onDelete(message).catch((error) => {
+      context.logger.error({ err: error }, 'Security deletion event failed');
+    }); });
+    client.on(Events.MessageBulkDelete, (messages) => { void Promise.all([...messages.values()].map((message) => scamAlerts.onDelete(message))).catch((error) => {
+      context.logger.error({ err: error }, 'Security bulk deletion event failed');
+    }); });
     client.on(Events.MessageCreate, (message) => { void detector.enqueue(message); });
     const destroy = client.destroy.bind(client);
     client.destroy = async () => { await detector.close(); await destroy(); };
@@ -48,7 +58,7 @@ export function createBot(context) {
   });
 
   client.on(Events.InteractionCreate, (interaction) => {
-    void handleInteraction(interaction, context).catch((error) => {
+    void handleInteraction(interaction, context, scamAlerts).catch((error) => {
       context.logger.error(
         { err: error, interactionId: interaction.id },
         'Interaction handling failed',
@@ -93,9 +103,11 @@ export function createBot(context) {
 /**
  * @param {import('discord.js').BaseInteraction} interaction
  * @param {import('./commands/command.js').CommandContext} context
+ * @param {ReturnType<typeof createScamAlerts>} [scamAlerts]
  * @returns {Promise<void>}
  */
-export async function handleInteraction(interaction, context) {
+export async function handleInteraction(interaction, context, scamAlerts) {
+  if (await scamAlerts?.handle(interaction)) return;
   if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand?.()) {
     return;
   }

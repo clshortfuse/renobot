@@ -12,3 +12,5 @@ coverage/
 data/
 .DS_Store
 Thumbs.db
+.private/scam-evidence/
+.private/scam-scans/

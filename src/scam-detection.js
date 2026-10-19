@@ -172,7 +172,7 @@ export function createScamOcr({ spawn = createScamOcrProcess, cooldownMs = 30_00
 
 /**
  * @param {{guildId: string, channelId: string, logger: import('pino').Logger,
- * send: (content: string) => Promise<unknown>,
+ * send: (alert: {message: import('discord.js').Message, reason: string, image: Buffer | undefined}) => Promise<unknown>,
  * ocr?: ReturnType<typeof createScamOcr>, download?: typeof downloadScamImage}} options
  */
 export function createScamDetector({ guildId, channelId, logger, send, ocr = createScamOcr(), download = downloadScamImage }) {
@@ -205,6 +205,8 @@ export function createScamDetector({ guildId, channelId, logger, send, ocr = cre
       chain = chain.then(async () => {
         if (closed) return;
         const texts = [];
+        /** @type {Buffer | undefined} */
+        let evidenceImage;
         /** @type {string[]} */
         const hashes = [];
         for (const attachment of attachments) {
@@ -212,6 +214,7 @@ export function createScamDetector({ guildId, channelId, logger, send, ocr = cre
             const bytes = await download(attachment.url, undefined, { hook: texts.length === 0,
               report: (event) => logger.debug({ messageId: message.id, attachmentId: attachment.id, ...event }, 'Scam header inspection') });
             const hash = createHash('sha256').update(bytes).digest('hex');
+            evidenceImage ??= bytes;
             const text = cache.get(hash) ?? await ocr.recognize(bytes);
             cache.set(hash, text);
             if (cache.size > 500) cache.delete(/** @type {string} */ (cache.keys().next().value));
@@ -231,8 +234,9 @@ export function createScamDetector({ guildId, channelId, logger, send, ocr = cre
             }
           }
           if (finding) {
-            const evidence = finding.images.map((image, i) => `Image ${i + 1}: ${image.domains.map((d) => d.replaceAll('.', '[.]')).join(', ').slice(0, 140) || 'no domain'}; ${image.rules.join(', ') || 'no template signals'}\nSHA-256: ${hashes[i]}`).join('\n');
-            await send(`Security alert: ${finding.reason}\nAuthor ID: ${message.author.id}\nhttps://discord.com/channels/${guildId}/${message.channelId}/${message.id}\n${evidence}\nAlert only; review context before taking action.`);
+            logger.info({ messageId: message.id, authorId: message.author.id, hashes, images: finding.images,
+              reason: finding.reason }, 'Scam evidence detected');
+            await send({ message, reason: finding.reason, image: evidenceImage });
             break;
           }
         }

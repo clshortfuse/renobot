@@ -1,15 +1,15 @@
 /* eslint-disable no-console -- Operator-facing scan CLI. */
 import { REST } from 'discord.js';
 import { appendFile, mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { searchHitMessages } from '../src/scam-search.js';
 import { campaignMetadataStage, createScamOcr, detectCampaign, downloadScamImage, imageSignals, ImageInspectionAbort } from '../src/scam-detection.js';
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN ?? '');
 const guild = process.env.DISCORD_GUILD_ID;
 if (!guild) throw new Error('DISCORD_GUILD_ID is required');
-const directory = join(tmpdir(), `renobot-scam-scan-${Date.now()}`);
+const directory = fileURLToPath(new URL(`../.private/scam-scans/${Date.now()}/`, import.meta.url));
 await mkdir(directory, { recursive: true, mode: 0o700 });
 const retainOcr = process.argv.includes('--retain-ocr');
 const audit = join(directory, 'audit.jsonl');
