@@ -23,11 +23,13 @@ test('stream cancels landscape PNG/JPEG/WebP after header instead of consuming p
 });
 
 test('known domains match exact hosts/subdomains, not lookalike suffixes', () => {
-  for (const host of ['wormwin.com', 'meviwin.com', 'basoowin.com', 'www.basoowin.com']) {
+  for (const host of ['wormwin.com', 'meviwin.com', 'basoowin.com', 'www.basoowin.com', 'doemox.com', 'www.doemox.com']) {
     assert.equal(detectCampaign([`Go to ${host}`])?.reason, 'Known scam domain');
   }
   assert.equal(detectCampaign(['wormwin.com.example.org']), undefined);
   assert.equal(detectCampaign(['notwormwin.com']), undefined);
+  assert.equal(detectCampaign(['doemox.com.example.org']), undefined);
+  assert.equal(detectCampaign(['notdoemox.com']), undefined);
 });
 
 test('all three observed campaign pitches support explicit bundle rules', () => {
@@ -91,6 +93,66 @@ test('intake exclusions, deduplication, hash cache and alert evidence', async ()
   await detector.close();
   await detector.enqueue(message({ id: 'closed' }));
   assert.equal(sent.length, 2);
+});
+
+test('plausible degraded claim continues to separate receipt and alerts', async () => {
+  // Rotate the observed domain so the known-domain shortcut cannot mask scoring regressions.
+  const hook = 'tharaw the bonus immediately. How to claim your reward: 1.Go to rotated.invalid Enter the special promo code: HOT £3200 bonus';
+  const proof = 'ithe Irawal Succ Withdra successful withdraw Recey veg $3.400';
+  assert.equal(imageSignals(hook).score, 6);
+  assert.equal(imageSignals(proof).supportScore, 4);
+  assert.equal(detectCampaign([hook, proof])?.score, 10);
+  assert.equal(detectCampaign([hook]), undefined);
+  let downloads = 0;
+  const sent = [];
+  const detector = createScamDetector({ guildId: 'guild', channelId: 'security', logger: pino({ level: 'silent' }),
+    download: async () => Buffer.from(String(downloads++)),
+    ocr: { recognize: async bytes => bytes.toString() === '0' ? hook : proof, close: async () => {} },
+    send: async evidence => { sent.push(evidence); } });
+  try {
+    await detector.enqueue(message());
+    assert.equal(downloads, 2);
+    assert.equal(sent.length, 1);
+  } finally { await detector.close(); }
+});
+
+test('scoring requires independent meaningful corroboration and caps repeated language', () => {
+  const hook = 'How to claim your reward at offer.invalid promo code HOT bonus';
+  assert.equal(detectCampaign([hook, 'Your purchase cost $3400']), undefined);
+  assert.equal(detectCampaign([hook, hook, hook, hook]), undefined);
+  assert.equal(detectCampaign([`${hook} Withdrawal success $3400`]), undefined);
+  assert.equal(detectCampaign(['shop.invalid promo code SALE', 'Withdrawal success $3400']), undefined);
+  assert.equal(detectCampaign(['How to claim your reward promo code HOT bonus', 'Withdrawal success $3400']), undefined);
+  assert.equal(detectCampaign(['Family holiday pictures', 'Withdrawal success $3400']), undefined);
+  assert.equal(imageSignals(hook.repeat(10)).score, imageSignals(hook).score);
+});
+
+test('plausibility and probability use separate score thresholds', () => {
+  assert.equal(imageSignals('shop.invalid promo code SALE').score, 3);
+  assert.equal(imageSignals('shop.invalid promo code SALE').plausible, true);
+  assert.equal(imageSignals('promo code SALE').plausible, false);
+  const hook = 'offer.invalid how to claim bonus';
+  assert.equal(imageSignals(hook).score, 4);
+  assert.equal(detectCampaign([hook, 'Withdrawal success']), undefined);
+  assert.equal(detectCampaign([hook, 'Withdrawal success $50'])?.score, 7);
+  assert.equal(detectCampaign([hook, 'Withdrawal success', '$50']), undefined);
+});
+
+test('duplicate mixed-signal images cannot corroborate themselves', async () => {
+  const text = 'How to claim your reward at offer.invalid promo code HOT bonus Withdrawal success $50';
+  assert.equal(detectCampaign([text, text]), undefined);
+  assert.equal(detectCampaign([text, `  ${text.toUpperCase()}\n`]), undefined);
+  let recognitions = 0;
+  let alerts = 0;
+  const detector = createScamDetector({ guildId: 'guild', channelId: 'security', logger: pino({ level: 'silent' }),
+    download: async () => Buffer.from('identical image'),
+    ocr: { recognize: async () => { recognitions++; return text; }, close: async () => {} },
+    send: async () => { alerts++; } });
+  try {
+    await detector.enqueue(message());
+    assert.equal(recognitions, 1);
+    assert.equal(alerts, 0);
+  } finally { await detector.close(); }
 });
 
 test('non-hook first image stops before supporting downloads', async () => {

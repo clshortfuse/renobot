@@ -28,19 +28,42 @@ the process even if Tesseract model initialization never settles.
 Recognition resumes on a subsequent candidate.
 Ordinary image decoding/download failures do not invalidate the worker.
 Tesseract callback errors are handled through rejected job promises, not throws.
-If the first OCR result has no qualifying hook or known domain, inspection stops
-at `ocr:no-hook` without downloading supporting images (including in audit scans).
+Scoring implementation: separate the first-image plausibility gate from the final
+corroborated alert decision, test degraded OCR and negative pairs, and keep live
+detection and the audit scanner on the same continuation rule.
 
-Known domains (`wormwin.com`, `meviwin.com`, `basoowin.com`) alert immediately.
-The compressed hook/receipt variant requires a domain, claim instructions, promo
-code and immediate bonus-withdrawal promise in one image, plus withdrawal-success,
-received-payment text and a dollar amount in another. Bounded observed OCR variants
-are accepted; whitespace around domain dots is normalized without substituting
-domain letters. The saved two-image sample passes without adding its hostname to
-the known-domain list; the regression was demonstrated failing before the fix.
-Otherwise require a domain-bearing casino/giveaway pitch and a separate image
-showing bonus activation or successful withdrawal. Do not guess OCR corrections.
-Record rule names, image positions, domains and hashes, not scam probabilities.
+Known domains (`wormwin.com`, `meviwin.com`, `basoowin.com`, `doemox.com`) alert immediately.
+Neither a known-domain match nor a high score authorizes automatic deletion;
+the separate honeypot policy and its enforce-mode countdown still apply.
+Otherwise each image receives bounded evidence weights (not probabilities):
+
+| Hook evidence | Points |
+| --- | ---: |
+| Domain | 1 |
+| Reward/claim instructions | 2 |
+| Promo-code instructions | 2 |
+| Bonus/giveaway language | 1 |
+| Crypto-casino phrase | 1 |
+| Immediate withdrawal promise | 1 |
+
+A first-image score of **3** keeps inspection going. Below that, inspection stops
+at `ocr:no-hook` without downloading supporting images (also in audit scans).
+Continuation does not itself authorize an alert.
+
+An alert requires a domain-bearing hook scoring at least **4**, with claim or
+crypto-casino language, and a **different image** showing withdrawal-success or
+bonus activation. That supporting category contributes 2 points, received-payment
+language adds 1, and a monetary amount adds 1. The pair must total **7** or more.
+A dollar amount alone cannot corroborate a hook. Each category counts once per
+image; repeated pitches and unrelated images cannot accumulate toward the total.
+Live detection and audit scans skip duplicate SHA-256 image content within each
+message. Identical normalized OCR text also cannot corroborate itself, even when
+the image bytes differ. This does not provide perceptual deduplication of all
+visually similar images.
+Withdrawal-success matching accepts bounded observed OCR fragments within 60
+characters, including `Irawal Succ`; received-payment variants include `Recey veg`.
+Whitespace around domain dots is normalized without substituting domain letters.
+Record scores, rule names, image positions, domains and hashes, not probabilities.
 Ignore bots, webhooks, foreign guilds and the destination channel. Include direct
 and forwarded-image attachments. Alerts disable mentions and omit OCR-derived URLs.
 

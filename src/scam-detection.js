@@ -3,8 +3,10 @@ import sharp from 'sharp';
 import { createScamOcrProcess } from './scam-ocr-process.js';
 import { imageSize } from 'image-size';
 
-const KNOWN_DOMAINS = new Set(['wormwin.com', 'meviwin.com', 'basoowin.com']);
+const KNOWN_DOMAINS = new Set(['wormwin.com', 'meviwin.com', 'basoowin.com', 'doemox.com']);
 const MAX_BYTES = 8 * 1024 * 1024;
+const PLAUSIBLE_SCORE = 3;
+const PROBABLE_SCORE = 7;
 
 /** @param {{content: string, attachments: {width?: number | null, height?: number | null}[]}} message */
 export function campaignMetadataStage({ content, attachments }) {
@@ -37,7 +39,20 @@ export function imageSignals(text) {
     && /promo\s*code/u.test(normalized) && /(?:withdraw|thdraw).{0,40}bonus.{0,30}(?:instantly|immediately)/u.test(normalized);
   const payout = /(?:withdrawal|nithdrawal|rawal).{0,25}(?:suc|success)/u.test(normalized)
     && /receiv(?:ed|eg)\b/u.test(normalized) && /\$\s*\d/u.test(normalized);
+  const claim = /\b(?:how to claim|claim your reward)\b/u.test(normalized);
+  const promo = /\bpromo\s*code\b/u.test(normalized);
+  const bonus = /\bbonus\b|giving away/u.test(normalized);
+  const receipt = /\b(?:withdrawal|withdraw|withdra|nithdrawal|rawal|irawal)\b.{0,60}\b(?:suc|succ|success\w*)\b/u.test(normalized);
+  const received = /\b(?:received|receiveg|recey\s*veg)\b/u.test(normalized);
+  const amount = /[$£€]\s*\d/u.test(normalized);
+  // Each category contributes once. Scores are evidence weights, not probabilities.
+  const score = Number(domains.length > 0) + Number(claim) * 2 + Number(promo) * 2
+    + Number(bonus) + Number(casino) + Number(withdrawal);
+  const supportScore = Number(receipt || bonusPage) * 2 + Number(received) + Number(amount);
+  const plausible = score >= PLAUSIBLE_SCORE;
+  const credibleHook = domains.length > 0 && score >= 4 && (claim || casino);
   return { domains, known, pitch: domains.length > 0 && casino && giveaway && (instructions || withdrawal),
+    score, supportScore, plausible, credibleHook, corroborates: receipt || bonusPage,
     compressedHook, payout,
     support: bonusPage || withdrawalPage,
     rules: [casino ? 'crypto-casino' : '', giveaway ? 'cash-bonus' : '', instructions ? 'claim-instructions' : '',
@@ -48,13 +63,15 @@ export function imageSignals(text) {
 /** @param {string[]} texts */
 export function detectCampaign(texts) {
   const images = texts.map(imageSignals);
+  const identities = texts.map(text => text.normalize('NFKC').toLowerCase().replace(/[’‘]/gu, "'").replace(/\s+/gu, ' ').trim());
   if (images.some((image) => image.known.length)) return { reason: 'Known scam domain', images };
-  if (images.some((image, index) => image.compressedHook
-    && images.some((other, otherIndex) => index !== otherIndex && other.payout))) {
-    return { reason: 'Giveaway claim hook with separate withdrawal receipt', images };
-  }
-  if (images.some((image, index) => image.pitch && images.some((other, otherIndex) => otherIndex !== index && other.support))) {
-    return { reason: 'Casino giveaway with supporting bonus/withdrawal image', images };
+  // Evaluate one hook/support pair, never accumulate unrelated images or repeated pitches.
+  for (const [index, image] of images.entries()) {
+    if (!image.credibleHook) continue;
+    const other = images.find((candidate, otherIndex) => otherIndex !== index && identities[otherIndex] !== identities[index] && candidate.corroborates
+      && image.score + candidate.supportScore >= PROBABLE_SCORE);
+    if (other) return { reason: 'Probable giveaway with supporting bonus/withdrawal image',
+      score: image.score + other.supportScore, images };
   }
   return undefined;
 }
@@ -215,6 +232,7 @@ export function createScamDetector({ guildId, channelId, logger, send, ocr = cre
             const bytes = await download(attachment.url, undefined, { hook: texts.length === 0,
               report: (event) => logger.debug({ messageId: message.id, attachmentId: attachment.id, ...event }, 'Scam header inspection') });
             const hash = createHash('sha256').update(bytes).digest('hex');
+            if (hashes.includes(hash)) continue;
             evidenceImage ??= bytes;
             const text = cache.get(hash) ?? await ocr.recognize(bytes);
             cache.set(hash, text);
@@ -229,8 +247,8 @@ export function createScamDetector({ guildId, channelId, logger, send, ocr = cre
           const finding = detectCampaign(texts);
           if (texts.length === 1 && !finding) {
             const hook = imageSignals(texts[0] ?? '');
-            if (!hook.pitch && !hook.compressedHook) {
-              logger.debug({ messageId: message.id, stage: 'ocr:no-hook' }, 'Scam inspection aborted');
+            if (!hook.plausible) {
+              logger.debug({ messageId: message.id, stage: 'ocr:no-hook', score: hook.score }, 'Scam inspection aborted');
               return;
             }
           }

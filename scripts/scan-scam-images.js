@@ -1,5 +1,6 @@
 /* eslint-disable no-console -- Operator-facing scan CLI. */
 import { REST } from 'discord.js';
+import { createHash } from 'node:crypto';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,20 +43,27 @@ try {
       }
       candidates++;
       const texts = [];
+      const hashes = new Set();
       try {
         for (const [index, attachment] of attachments.entries()) {
           /** @type {{stage: string, bytes: number}[]} */
           const events = [];
           const bytes = await downloadScamImage(attachment.url, undefined, { hook: index === 0, report: (event) => events.push(event) });
+          const hash = createHash('sha256').update(bytes).digest('hex');
+          if (hashes.has(hash)) {
+            await record({ id: message.id, stage: 'image:duplicate', image: index + 1, hash });
+            continue;
+          }
+          hashes.add(hash);
           const text = await ocr.recognize(bytes);
           texts.push(text);
           await record({ id: message.id, stage: 'ocr:image', image: index + 1, bytes: bytes.length, events,
             signals: imageSignals(text), ...(retainOcr ? { text } : {}) });
           if (detectCampaign(texts)) break;
-          if (index === 0 && !imageSignals(text).pitch && !imageSignals(text).compressedHook) break;
+          if (index === 0 && !imageSignals(text).plausible) break;
         }
         const finding = detectCampaign(texts);
-        const final = { id: message.id, url, stage: finding ? 'result:match' : texts.length === 1 ? 'ocr:no-hook' : 'result:no-rule-match', reason: finding?.reason, metadata };
+        const final = { id: message.id, url, stage: finding ? 'result:match' : texts.length === 1 && !imageSignals(texts[0] ?? '').plausible ? 'ocr:no-hook' : 'result:no-rule-match', reason: finding?.reason, metadata };
         await record(final); console.log(JSON.stringify(final));
       } catch (error) {
         const final = { id: message.id, url, stage: error instanceof ImageInspectionAbort ? error.stage : 'inspection:error',
