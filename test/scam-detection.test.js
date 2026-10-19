@@ -185,6 +185,6 @@ test('OCR child exits on parent disconnect even with a live worker thread', asyn
 test('indexed search excludes context before deduplication', async () => {
   const { searchHitMessages } = await import('../src/scam-search.js');
   const hit = { id: 'hit', hit: true };
-  const legacy = { id: 'legacy' };
+  const legacy = /** @type {{id: string, hit?: boolean}} */ ({ id: 'legacy' });
   assert.deepEqual(searchHitMessages([[{ id: 'hit', hit: false }, hit], [legacy]]), [hit, legacy]);
 });
