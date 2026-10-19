@@ -4,7 +4,69 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
-import { convertHdrPng, convertHdrPngBytes, hdrReplyOptions, inspectHdrPng } from '../src/hdr-avif.js';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { convertHdrPng, convertHdrPngBytes, fixHdrMessage, hdrReplyOptions, inspectHdrPng } from '../src/hdr-avif.js';
+
+test('converter reports stdout overflow as a user notice but preserves stderr failures', async (t) => {
+  let stream = 'stdout';
+  const mock = t.mock.method(childProcess, 'execFile', (/** @type {[string, string[], object, (error: Error, stdout: Buffer, stderr: Buffer) => void]} */ ...args) => {
+    const callback = args[3];
+    const error = Object.assign(new RangeError(`${stream} maxBuffer length exceeded`), {
+      code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+    });
+    queueMicrotask(() => callback(error, Buffer.alloc(16), Buffer.alloc(0)));
+    return { stdin: { on() {}, end() {} } };
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(convertHdrPngBytes(Buffer.from('input'), 16), {
+      name: 'Error', message: 'Converted AVIF exceeds the server upload limit.',
+    });
+    stream = 'stderr';
+    await assert.rejects(convertHdrPngBytes(Buffer.from('input'), 16), {
+      code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', message: 'stderr maxBuffer length exceeded',
+    });
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test('HDR command shows safe notices, accepts five PNGs, and propagates internal failures', async (t) => {
+  /** @type {string[]} */
+  const replies = [];
+  const attachments = new Map();
+  const interaction = /** @type {import('discord.js').MessageContextMenuCommandInteraction} */ (/** @type {unknown} */ ({
+    deferReply: async () => {},
+    editReply: async (/** @type {string} */ content) => { replies.push(content); },
+    targetMessage: { attachments },
+  }));
+  for (let i = 0; i < 5; i++) {
+    attachments.set(String(i), { name: `${i}.png`, size: 100, url: 'https://cdn.discordapp.com/test.png' });
+  }
+  let downloads = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    downloads++;
+    return new Response(new Uint8Array(8));
+  });
+  await fixHdrMessage(interaction);
+  assert.equal(downloads, 5);
+  assert.equal(replies.pop(), 'No supported RGB BT.2020/PQ PNG attachments found.');
+
+  attachments.get('0').size = 65 * 1024 * 1024;
+  await fixHdrMessage(interaction);
+  assert.equal(replies.pop(), 'Attachment exceeds 64 MiB.');
+  attachments.get('0').size = 100;
+
+  t.mock.method(globalThis, 'fetch', async () => { throw Error('internal transport details'); });
+  await assert.rejects(fixHdrMessage(interaction), /internal transport details/);
+  assert.deepEqual(replies, []);
+
+  for (let i = 5; i < 11; i++) attachments.set(String(i), { name: `${i}.png` });
+  await fixHdrMessage(interaction);
+  assert.equal(replies.pop(), 'Convert at most ten PNG attachments per message.');
+});
 
 /** @param {Buffer} avif */
 function assertHdrProfile(avif) {
