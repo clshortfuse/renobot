@@ -3,7 +3,7 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 import globals from 'globals';
 
 export default defineConfig([
-  globalIgnores(['coverage/**', 'node_modules/**']),
+  globalIgnores(['coverage/**', 'node_modules/**', '.private/**']),
   js.configs.recommended,
   {
     files: ['**/*.js'],
