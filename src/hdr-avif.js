@@ -103,15 +103,21 @@ export async function convertHdrPngBytes(input, outputLimit = maxBytes) {
 }
 
 /** Preserve the caption independently of the reply reference, without pinging anyone.
- * @param {Pick<import('discord.js').Message, 'id' | 'content' | 'author'>} message
+ * @param {Pick<import('discord.js').Message, 'id' | 'content' | 'author'> &
+ *   Partial<Pick<import('discord.js').Message, 'messageSnapshots'>>} message
  * @param {import('discord.js').AttachmentPayload[]} files
  * @returns {import('discord.js').MessageCreateOptions}
  */
 export function hdrReplyOptions(message, files) {
+  const snapshots = [...(message.messageSnapshots?.values() ?? [])];
+  const caption = [message.content,
+    ...snapshots.map(snapshot => snapshot.content ? `**Forwarded message**\n${snapshot.content}` : '')]
+    .filter(Boolean).join('\n\n');
   return {
     content: 'Fixed for Discord',
-    embeds: [{ author: { name: message.author.username },
-      ...(message.content ? { description: message.content } : {}) }],
+    embeds: [{ ...(snapshots.length ? { title: `Forwarded by ${message.author.username}` }
+      : { author: { name: message.author.username } }),
+      ...(caption ? { description: caption } : {}) }],
     files,
     reply: { messageReference: message.id, failIfNotExists: false },
     allowedMentions: { parse: [], repliedUser: false },
@@ -129,7 +135,10 @@ export async function fixHdrMessage(interaction) {
   const started = performance.now();
   try {
     const message = interaction.targetMessage;
-    const attachments = [...message.attachments.values()].filter(a => a.name?.toLowerCase().endsWith('.png'));
+    const attachments = [
+      ...message.attachments.values(),
+      ...[...(message.messageSnapshots?.values() ?? [])].flatMap(snapshot => [...snapshot.attachments.values()]),
+    ].filter(a => a.name?.toLowerCase().endsWith('.png'));
     if (attachments.length > 10) throw new HdrNotice('Convert at most ten PNG attachments per message.');
     /** @type {import('discord.js').AttachmentPayload[]} */
     const files = [];

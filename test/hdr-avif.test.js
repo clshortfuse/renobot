@@ -68,6 +68,78 @@ test('HDR command shows safe notices, accepts five PNGs, and propagates internal
   assert.equal(replies.pop(), 'Convert at most ten PNG attachments per message.');
 });
 
+test('HDR command converts forwarded snapshot PNGs and enforces shared limits', async (t) => {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1);
+  header.writeUInt32BE(1, 4);
+  header[8] = 16;
+  header[9] = 2;
+  const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'),
+    chunk('IHDR', header), chunk('cICP', Buffer.from([9, 16, 0, 1])),
+    chunk('IDAT', Buffer.alloc(0))]);
+  const attachment = { id: '123', name: 'forwarded.PNG', size: png.length,
+    url: 'https://cdn.discordapp.com/attachments/123/456/forwarded.png' };
+  const attachments = new Map([[attachment.id, attachment]]);
+  const direct = new Map();
+  /** @type {string[]} */
+  const replies = [];
+  /** @type {import('discord.js').MessageCreateOptions[]} */
+  const posts = [];
+  /** @type {string[]} */
+  const downloads = [];
+  const interaction = /** @type {import('discord.js').MessageContextMenuCommandInteraction} */ (/** @type {unknown} */ ({
+    attachmentSizeLimit: 1024,
+    deferReply: async () => {},
+    editReply: async (/** @type {string} */ content) => { replies.push(content); },
+    targetMessage: { id: 'forward', content: '', author: { username: 'Forwarder' },
+      attachments: direct, messageSnapshots: new Map([['original', { content: 'Forwarded caption', attachments }]]),
+      channel: { send: async (/** @type {import('discord.js').MessageCreateOptions} */ options) => {
+        posts.push(options);
+        return { url: 'https://discord.com/channels/guild/channel/result' };
+      } },
+    },
+  }));
+  t.mock.method(globalThis, 'fetch', async (/** @type {URL} */ url) => {
+    downloads.push(String(url));
+    return new Response(new Uint8Array(png));
+  });
+  const mock = t.mock.method(childProcess, 'execFile', (/** @type {[string, string[], object, (error: null, stdout: Buffer, stderr: Buffer) => void]} */ ...args) => {
+    queueMicrotask(() => args[3](null, Buffer.from('avif'), Buffer.alloc(0)));
+    return { stdin: { on() {}, end() {} } };
+  });
+  syncBuiltinESMExports();
+  try {
+    await fixHdrMessage(interaction);
+    assert.deepEqual(downloads, [attachment.url, attachment.url]);
+    assert.equal(posts.length, 1);
+    assert.ok(posts[0]);
+    assert.deepEqual(posts[0].files, [{ attachment: Buffer.from('avif'), name: 'hdr_123.avif' }]);
+    assert.deepEqual(posts[0].reply, { messageReference: 'forward', failIfNotExists: false });
+    assert.deepEqual(posts[0].embeds, [{ title: 'Forwarded by Forwarder',
+      description: '**Forwarded message**\nForwarded caption' }]);
+    assert.match(replies.pop() ?? '', /^Posted 1 AVIF/);
+
+    interaction.targetMessage.content = 'Forwarder note';
+    await fixHdrMessage(interaction);
+    assert.deepEqual(posts[1]?.embeds, [{ title: 'Forwarded by Forwarder',
+      description: 'Forwarder note\n\n**Forwarded message**\nForwarded caption' }]);
+    assert.match(replies.pop() ?? '', /^Posted 1 AVIF/);
+
+    attachment.size = 65 * 1024 * 1024;
+    await fixHdrMessage(interaction);
+    assert.equal(replies.pop(), 'Attachment exceeds 64 MiB.');
+    attachment.size = png.length;
+    for (let i = 0; i < 10; i++) direct.set(String(i), { name: `${i}.png` });
+    await fixHdrMessage(interaction);
+    assert.equal(replies.pop(), 'Convert at most ten PNG attachments per message.');
+    assert.equal(downloads.length, 4);
+    assert.equal(posts.length, 2);
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 /** @param {Buffer} avif */
 function assertHdrProfile(avif) {
   const marker = avif.indexOf(Buffer.from('colrprof'));
