@@ -206,6 +206,18 @@ test('HDR scan identifies PQ before reading IDAT payload', () => {
   assert.equal(inspectHdrPng(Buffer.alloc(8)), 'unsupported');
 });
 
+test('HDR scan accepts the 16-bit RGBA PQ format used by Discord plot attachments', () => {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1672);
+  header.writeUInt32BE(5320, 4);
+  header[8] = 16;
+  header[9] = 6;
+  const bytes = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'),
+    chunk('IHDR', header), chunk('cICP', Buffer.from([9, 16, 0, 1])),
+    chunk('IDAT', Buffer.alloc(0)).subarray(0, 8)]);
+  assert.equal(inspectHdrPng(bytes), 'hdr');
+});
+
 test('HDR scan rejects oversized metadata', () => {
   const bytes = Buffer.alloc(16);
   Buffer.from('89504e470d0a1a0a', 'hex').copy(bytes);
@@ -231,6 +243,40 @@ test('captionless public HDR reply retains attribution without an empty descript
   const options = hdrReplyOptions({ id: '234567890123456789', content: '', author }, []);
   assert.deepEqual(options.embeds, [{ author: { name: author.username } }]);
 });
+
+test('native converter preserves opaque RGBA PQ samples and rejects transparency',
+  { skip: !process.env.HDR_CONVERTER_PATH }, async () => {
+    for (const depth of [8, 16]) {
+      const outputs = [];
+      for (const channels of [3, 4]) {
+        const header = Buffer.alloc(13);
+        header.writeUInt32BE(4);
+        header.writeUInt32BE(4, 4);
+        header[8] = depth;
+        header[9] = channels === 4 ? 6 : 2;
+        const stride = 1 + 4 * channels * (depth / 8);
+        const rows = Buffer.alloc(4 * stride);
+        for (let y = 0; y < 4; y++) {
+          for (let x = 0; x < 4; x++) {
+            for (let c = 0; c < channels; c++) {
+              const offset = y * stride + 1 + (x * channels + c) * (depth / 8);
+              if (depth === 16) rows.writeUInt16BE(c === 3 ? 65535 : 32768 + c * 1000, offset);
+              else rows[offset] = c === 3 ? 255 : 128 + c * 4;
+            }
+          }
+        }
+        const png = () => Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'),
+          chunk('IHDR', header), chunk('cICP', Buffer.from([9, 16, 0, 1])),
+          chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
+        outputs.push((await convertHdrPngBytes(png())).bytes);
+        if (channels === 4) {
+          rows[1 + 3 * (depth / 8)] = 254;
+          await assert.rejects(convertHdrPngBytes(png()), /Transparent RGBA/u);
+        }
+      }
+      assert.deepEqual(outputs[1], outputs[0]);
+    }
+  });
 
 test('native converter supports one-pixel-wide and one-pixel-high PNGs',
   { skip: !process.env.HDR_CONVERTER_PATH }, async () => {

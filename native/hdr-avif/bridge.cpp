@@ -109,8 +109,9 @@ static int Convert(const char* inputPath, const char* outputPath) {
   const uint32_t width = png_get_image_width(png, info);
   const uint32_t height = png_get_image_height(png, info);
   const int depth = png_get_bit_depth(png, info);
-  if (!width || !height || uint64_t(width) * height > 40000000 || png_get_color_type(png, info) != PNG_COLOR_TYPE_RGB || (depth != 8 && depth != 16)) {
-    png_error(png, "Only RGB 8/16-bit PNGs within 40 million pixels are supported");
+  const int colorType = png_get_color_type(png, info);
+  if (!width || !height || uint64_t(width) * height > 40000000 || (colorType != PNG_COLOR_TYPE_RGB && colorType != PNG_COLOR_TYPE_RGBA) || (depth != 8 && depth != 16)) {
+    png_error(png, "Only RGB or opaque RGBA 8/16-bit PNGs within 40 million pixels are supported");
   }
   // No gamma, ICC, or transfer-function transform: preserve absolute PQ codes.
   png_read_update_info(png, info);
@@ -121,12 +122,24 @@ static int Convert(const char* inputPath, const char* outputPath) {
   for (uint32_t y = 0; y < height; ++y) rows[y] = static_cast<png_bytep>(png_malloc(png, png_get_rowbytes(png, info)));
   png_read_image(png, rows);
   png_read_end(png, info);
+  const size_t channels = colorType == PNG_COLOR_TYPE_RGBA ? 4 : 3;
+  if (channels == 4) {
+    for (uint32_t y = 0; y < height; ++y) {
+      for (size_t x = 0; x < width; ++x) {
+        const size_t alpha = (x * 4 + 3) * (depth == 16 ? 2 : 1);
+        if (rows[y][alpha] != 255 || (depth == 16 && rows[y][alpha + 1] != 255)) {
+          png_error(png, "Transparent RGBA PNGs are not supported");
+        }
+      }
+    }
+  }
   std::vector<uint16_t> pixels(size_t(width) * height * 3);
   for (uint32_t y = 0; y < height; ++y) {
     for (size_t x = 0; x < size_t(width) * 3; ++x) {
+      const size_t source = (x / 3) * channels + x % 3;
       pixels[size_t(y) * width * 3 + x] = depth == 16
-                                              ? uint16_t((uint16_t(rows[y][2 * x]) << 8) | rows[y][2 * x + 1])
-                                              : uint16_t(rows[y][x] * 257);
+                                              ? uint16_t((uint16_t(rows[y][2 * source]) << 8) | rows[y][2 * source + 1])
+                                              : uint16_t(rows[y][source] * 257);
     }
   }
   png_destroy_read_struct(&png, &info, nullptr);

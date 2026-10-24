@@ -25,7 +25,7 @@ export function inspectHdrPng(bytes) {
       const width = bytes.readUInt32BE(offset + 8);
       const height = bytes.readUInt32BE(offset + 12);
       if (!width || !height || width * height > 40_000_000) throw new HdrNotice('Image exceeds the 40-million-pixel limit.');
-      if (bytes[offset + 17] !== 2) throw new HdrNotice('Only RGB PNGs are supported.');
+      if (bytes[offset + 17] !== 2 && bytes[offset + 17] !== 6) throw new HdrNotice('Only RGB or opaque RGBA PNGs are supported.');
     }
     if (type === 'cICP' && length === 4) {
       pq = bytes.subarray(offset + 8, offset + 12).equals(Buffer.from([9, 16, 0, 1]));
