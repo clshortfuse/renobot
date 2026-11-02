@@ -6,6 +6,7 @@ import {
   Partials,
 } from 'discord.js';
 import { fixHdrMessage } from './hdr-avif.js';
+import { handleRule8Button, moderateRule8 } from './rule-8.js';
 import { createScamDetector } from './scam-detection.js';
 import { createScamAlerts } from './scam-alerts.js';
 import { createSecurityAutodelete } from './security-autodelete.js';
@@ -123,6 +124,7 @@ export function createBot(context) {
  * @returns {Promise<void>}
  */
 export async function handleInteraction(interaction, context, scamAlerts) {
+  if (await handleRule8Button(interaction, context)) return;
   if (await scamAlerts?.handle(interaction)) return;
   if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand?.()) {
     return;
@@ -131,17 +133,20 @@ export async function handleInteraction(interaction, context, scamAlerts) {
   const command = context.commands.get(interaction.commandName);
 
   if (!interaction.isChatInputCommand() && interaction.isMessageContextMenuCommand()) {
-    if (interaction.commandName !== 'Fix HDR Preview'
+    const rule8 = interaction.commandName === 'Report: Rule 8';
+    if ((!rule8 && interaction.commandName !== 'Fix HDR Preview')
       || interaction.guildId !== context.guildId || !context.guildId) {
       await interaction.reply({ content: 'This command is restricted to the configured server.', flags: MessageFlags.Ephemeral });
       return;
     }
     try {
-      await fixHdrMessage(interaction);
+      if (rule8) await moderateRule8(interaction, context);
+      else await fixHdrMessage(interaction);
     } catch (error) {
-      context.logger.error({ err: error, interactionId: interaction.id }, 'HDR conversion failed');
-      if (interaction.deferred) await interaction.editReply('HDR conversion failed. Check the bot logs for details.');
-      else await interaction.reply({ content: 'HDR conversion failed.', flags: MessageFlags.Ephemeral });
+      const failure = rule8 ? 'Rule 8 action failed. Check the bot logs for details.' : 'HDR conversion failed.';
+      context.logger.error({ err: error, interactionId: interaction.id }, failure);
+      if (interaction.deferred) await interaction.editReply(failure);
+      else await interaction.reply({ content: failure, flags: MessageFlags.Ephemeral });
     }
     return;
   }
