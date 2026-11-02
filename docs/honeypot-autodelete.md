@@ -22,6 +22,35 @@ mark the alert deleted without a cancellation or manual-review failure warning.
 
 ## Eligibility and countdown
 
+The preferred trigger is a **confirmed ban by `DISCORD_HONEYPOT_BOT_ID`**.
+Renobot verifies the current ban reason (`Triggered honeypot -> ban`) and the
+latest ban/unban audit entry's executor and reason. A fresh ban or audit-log
+event can initiate cleanup; merely displaying a ban reason on an alert cannot.
+The bot needs Ban Members and View Audit Log permissions. Audit-event delivery
+handles attribution arriving after the ban event. Unverifiable bans fail closed.
+
+In this mode, all eligible messages Renobot observed in the **60 seconds before
+the ban**, across channels, are candidates—not just independently detected spam
+or the author's last message. Source creation time determines recency. Messages
+older than that window, sent after the ban, or missed while Renobot was offline
+are not swept. Tracking is bounded to 200 messages; overflow pauses automatic
+actions for manual review. Current ban attribution is rechecked before deletion,
+and unban events cancel pending actions. Duplicate events do not restart timers.
+
+Ordinary observations are cached without entering the action queue unless the
+author already has a confirmed trigger. Ban-event intake retains a bounded
+candidate snapshot while queueing and Discord verification run; eligibility is
+checked against the ban timestamp, not the time those requests finish. Active
+correlation keeps its trigger alive through scheduling without preventing an
+unban from cancelling it.
+
+If the first lookup lacks audit attribution, the same snapshot is retained for
+up to 60 seconds from first ban-event intake and reused by the later audit event.
+Retries do not extend that deadline. At most 200 attribution snapshots are kept;
+overflow pauses automatic actions. Unban invalidates the snapshot immediately,
+including verification already in flight; shutdown clears retained snapshots.
+
+Legacy channel-only mode (when the bot ID is unset) retains the previous policy:
 Within 60 seconds, in either arrival order, a configured honeypot post can
 correlate with either the same author's recent outside-channel message or a
 detected-spam candidate. Detection uses original intake time before OCR.
@@ -47,7 +76,9 @@ aging past it during the 15-second countdown does not invalidate that decision.
 
 ## Configuration and limits
 
-- `DISCORD_HONEYPOT_CHANNEL_ID`: explicit opt-in; must differ from security.
+- `DISCORD_HONEYPOT_BOT_ID`: preferred explicit opt-in; trusted ban executor ID.
+- `DISCORD_HONEYPOT_CHANNEL_ID`: legacy opt-in; must differ from security. Not
+	required when the bot ID is configured; bot-ID mode takes precedence.
 - `SECURITY_AUTODELETE_MODE`: `dry-run` by default; `enforce` starts timers.
 - `SECURITY_AUTODELETE_EXEMPT_USER_IDS`, `SECURITY_AUTODELETE_EXEMPT_ROLE_IDS`: comma-separated IDs.
 - `SECURITY_AUTODELETE_USER_LIMIT`: default 10 scheduled actions per ten minutes.
@@ -56,7 +87,7 @@ aging past it during the 15-second countdown does not invalidate that decision.
 Owner, bots, webhooks, and foreign guilds are excluded. Departed/banned users
 have no current exempt roles. Reports must stay in the configured guild.
 Recent alerts and activity are bounded to 200 entries; correlation expires after
-60 seconds. Activity tracks the latest outside-channel message per author.
+60 seconds. Legacy channel-mode activity tracks the latest outside-channel message per author.
 Pending and terminal scheduled-action records are bounded to 200 per session;
 reaching capacity pauses scheduling rather than forgetting cancellation history.
 Queue/cap overflow fails closed. Shutdown cancels timers, cleans reactions best

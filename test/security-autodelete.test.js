@@ -1,20 +1,25 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import pino from 'pino';
-import { Collection } from 'discord.js';
+import { AuditLogEvent, Collection } from 'discord.js';
 import { createSecurityAutodelete, readSecurityAutodeleteConfig } from '../src/security-autodelete.js';
 
 /** @param {import('node:test').TestContext} t */
 function fixture(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  /** @type {NonNullable<ReturnType<typeof readSecurityAutodeleteConfig>>} */
   const config = { channelId: 'trap', mode: 'enforce', exemptUsers: ['trusted'], exemptRoles: ['staff'], userLimit: 10, guildLimit: 30 };
+  const auditEntry = { id: 'ban-entry', targetId: 'user', executorId: 'honeypot', reason: 'Triggered honeypot -> ban', action: AuditLogEvent.MemberBanAdd, createdTimestamp: Date.now() };
+  let banned = true;
   const state = { exempt: false, permission: true, missing: false, fail: false, roleLookupFails: false, alertMissing: false };
   /** @type {string[]} */ const deleted = [];
   /** @type {string[]} */ const alerts = [];
   /** @type {string[]} */ const statuses = [];
   /** @type {string[]} */ const updated = [];
   let marked = 0, removed = 0;
-  const guild = { emojis: { cache: new Collection([['emoji', { name: 'banme' }]]) }, members: {
+  const guild = { id: 'guild', bans: { fetch: async () => { if (!banned) throw { code: 10026 }; return { reason: 'Triggered honeypot -> ban' }; } },
+    fetchAuditLogs: async () => ({ entries: new Collection([[auditEntry.id, auditEntry]]) }),
+    emojis: { cache: new Collection([['emoji', { name: 'banme' }]]) }, members: {
     fetch: async () => { if (state.roleLookupFails) throw new Error('lookup failed'); return { roles: { cache: new Map(state.exempt ? [['staff', {}]] : []) } }; }, fetchMe: async () => ({}),
   } };
   /** @param {string} id @param {string} [channelId] @param {string} [user] */
@@ -39,7 +44,9 @@ function fixture(t) {
   });
   const drain = () => new Promise(resolve => setImmediate(resolve));
   t.after(() => service.close());
-  return { service, config, state, deleted, updated, alerts, statuses, message, drain, marked: () => marked, removed: () => removed,
+  return { service, config, state, guild, deleted, updated, alerts, statuses, message, drain, marked: () => marked, removed: () => removed,
+    auditEntry, ban: () => service.onBan(/** @type {import('discord.js').GuildBan} */ (/** @type {unknown} */ ({ guild, user: { id: 'user' } }))),
+    unban: () => { banned = false; return service.onBan(/** @type {import('discord.js').GuildBan} */ (/** @type {unknown} */ ({ guild, user: { id: 'user' } })), false); },
     trigger: () => service.observe(message('trap-post', 'trap')),
     flag: (id = 'spam', at = Date.now()) => service.flag({ message: message(id), observedAt: at, reason: 'spam', image: Buffer.from('image') }),
   };
@@ -59,6 +66,8 @@ test('configuration defaults to dry-run and validates channel and caps', () => {
     userLimit: 5, guildLimit: 20 });
   assert.equal(readSecurityAutodeleteConfig({ DISCORD_HONEYPOT_CHANNEL_ID: '1408259940908531915' })?.mode, 'dry-run');
   assert.throws(() => readSecurityAutodeleteConfig({ DISCORD_HONEYPOT_CHANNEL_ID: 'bad' }));
+  assert.equal(readSecurityAutodeleteConfig({ DISCORD_HONEYPOT_BOT_ID: '1450060292716494940' })?.botId, '1450060292716494940');
+  assert.throws(() => readSecurityAutodeleteConfig({ DISCORD_HONEYPOT_BOT_ID: 'bad' }));
   assert.throws(() => readSecurityAutodeleteConfig({ DISCORD_HONEYPOT_CHANNEL_ID: '1408259940908531915', SECURITY_AUTODELETE_USER_LIMIT: '0' }));
 });
 
@@ -154,3 +163,136 @@ test('missing alert at execution does not falsely mark the source deleted', asyn
   assert.deepEqual(f.deleted, []); assert.deepEqual(f.updated, []);
   assert.equal(f.statuses.includes('Already deleted.'), false);
 });
+
+test('confirmed Honeypot ban schedules every recent message without a trap-channel post or spam classification', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot';
+  await f.service.observe(f.message('first'));
+  await f.service.observe(f.message('second', 'another-channel'));
+  await f.ban(); await f.ban();
+  assert.equal(f.marked(), 2); assert.deepEqual(f.deleted, []);
+  t.mock.timers.tick(14999); await f.drain(); assert.deepEqual(f.deleted, []);
+  t.mock.timers.tick(1); await f.drain(); assert.deepEqual(f.deleted, ['first', 'second']);
+});
+
+for (const mismatch of ['executor', 'reason', 'stale', 'unban']) {
+  test(`Honeypot attribution rejects ${mismatch}`, async t => {
+    const f = fixture(t); f.config.botId = 'honeypot'; await f.service.observe(f.message('source'));
+    if (mismatch === 'executor') f.auditEntry.executorId = 'moderator';
+    if (mismatch === 'reason') f.auditEntry.reason = 'other reason';
+    if (mismatch === 'stale') f.auditEntry.createdTimestamp -= 60000;
+    if (mismatch === 'unban') f.auditEntry.action = AuditLogEvent.MemberBanRemove;
+    await f.ban(); assert.equal(f.marked(), 0);
+  });
+}
+
+test('a later audit event can confirm the ban once attribution becomes available', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot'; await f.service.observe(f.message('source'));
+  f.auditEntry.executorId = 'unknown'; await f.ban(); assert.equal(f.marked(), 0);
+  f.auditEntry.executorId = 'honeypot'; await f.ban(); assert.equal(f.marked(), 1);
+});
+
+test('ban cleanup excludes old messages and messages created after the ban', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot';
+  await f.service.observe(Object.assign(f.message('old'), { createdTimestamp: Date.now() - 60000 }));
+  await f.ban(); t.mock.timers.tick(1);
+  await f.service.observe(f.message('after'));
+  assert.equal(f.marked(), 0);
+});
+
+test('unban cancels countdowns and removes the marker', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot'; await f.service.observe(f.message('source')); await f.ban();
+  await f.unban(); t.mock.timers.tick(15000); await f.drain();
+  assert.deepEqual(f.deleted, []); assert.equal(f.removed(), 1);
+});
+
+test('ban attribution is rechecked at execution', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot'; await f.service.observe(f.message('source')); await f.ban();
+  f.auditEntry.id = 'replacement-ban'; t.mock.timers.tick(15000); await f.drain();
+  assert.deepEqual(f.deleted, []);
+});
+
+test('confirmed ban respects dry-run and moderator cancellation', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot'; f.config.mode = 'dry-run';
+  await f.service.observe(f.message('dry')); await f.ban(); assert.equal(f.marked(), 0);
+  f.config.mode = 'enforce'; await f.service.observe(f.message('cancel')); await f.service.cancel('cancel');
+  t.mock.timers.tick(15000); await f.drain(); assert.deepEqual(f.deleted, []);
+});
+
+test('delayed audit visibility reuses the original ban snapshot after rolling-cache expiry', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot';
+  await f.service.observe(f.message('near-cutoff'));
+  t.mock.timers.tick(59000); f.auditEntry.createdTimestamp = Date.now();
+  let visible = false;
+  const audit = f.guild.fetchAuditLogs;
+  t.mock.method(f.guild, 'fetchAuditLogs', async () => visible ? audit() : { entries: new Collection() });
+  await f.ban(); assert.equal(f.marked(), 0);
+  t.mock.timers.tick(2000);
+  await f.service.observe(f.message('ordinary', 'source', 'other'));
+  visible = true;
+  await f.ban(); await f.ban();
+  assert.equal(f.marked(), 1);
+  t.mock.timers.tick(15000); await f.drain();
+  assert.deepEqual(f.deleted, ['near-cutoff']);
+});
+
+test('pending attribution expires without refreshing its original snapshot', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot';
+  await f.service.observe(f.message('expired'));
+  const audit = f.guild.fetchAuditLogs;
+  let visible = false;
+  t.mock.method(f.guild, 'fetchAuditLogs', async () => visible ? audit() : { entries: new Collection() });
+  await f.ban(); t.mock.timers.tick(59000); await f.ban();
+  t.mock.timers.tick(1000); visible = true;
+  await f.ban(); assert.equal(f.marked(), 0);
+});
+
+test('unban invalidates an in-flight attribution snapshot before it can schedule', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot';
+  await f.service.observe(f.message('source'));
+  const gate = Promise.withResolvers();
+  const audit = f.guild.fetchAuditLogs;
+  t.mock.method(f.guild, 'fetchAuditLogs', async () => { await gate.promise; return audit(); });
+  const ban = f.ban(); await f.drain();
+  await f.unban(); gate.resolve(undefined); await ban;
+  assert.equal(f.marked(), 0);
+  t.mock.timers.tick(15000); await f.drain(); assert.deepEqual(f.deleted, []);
+});
+
+test('ordinary traffic does not fill the action queue during a ban lookup', async t => {
+  const f = fixture(t); f.config.botId = 'honeypot';
+  await f.service.observe(f.message('target'));
+  const gate = Promise.withResolvers();
+  const fetch = f.guild.bans.fetch;
+  t.mock.method(f.guild.bans, 'fetch', async () => { await gate.promise; return fetch(); });
+  const ban = f.ban(); await f.drain();
+  const observations = Array.from({ length: 25 }, (_, i) => f.service.observe(f.message(`ordinary-${i}`, 'source', 'other')));
+  gate.resolve(undefined);
+  await Promise.all([ban, ...observations]);
+  assert.equal(f.statuses.some(status => status.includes('paused')), false);
+  assert.equal(f.marked(), 1);
+  t.mock.timers.tick(15000); await f.drain();
+  assert.deepEqual(f.deleted, ['target']);
+});
+
+for (const delay of ['lookup', 'source', 'long-source']) {
+  test(`ban-relative eligibility survives slow ${delay} requests`, async t => {
+    const f = fixture(t); f.config.botId = 'honeypot';
+    const source = f.message('near-cutoff');
+    await f.service.observe(source);
+    t.mock.timers.tick(59000); f.auditEntry.createdTimestamp = Date.now();
+    if (delay === 'lookup') {
+      const fetch = f.guild.bans.fetch;
+      t.mock.method(f.guild.bans, 'fetch', async () => { t.mock.timers.tick(2000); return fetch(); });
+    } else {
+      const fetch = source.channel.messages.fetch.bind(source.channel.messages);
+      t.mock.method(source.channel.messages, 'fetch', async () => {
+        t.mock.timers.tick(delay === 'long-source' ? 61000 : 2000);
+        return fetch({ message: source.id });
+      });
+    }
+    await f.ban();
+    assert.equal(f.marked(), 1);
+    t.mock.timers.tick(15000); await f.drain();
+    assert.deepEqual(f.deleted, ['near-cutoff']);
+  });
+}

@@ -1,4 +1,4 @@
-import { PermissionFlagsBits } from 'discord.js';
+import { AuditLogEvent, PermissionFlagsBits } from 'discord.js';
 import { deleteAlertSource } from './scam-alerts.js';
 
 const WINDOW = 60_000;
@@ -8,8 +8,10 @@ const WARNING_WINDOW = 60_000;
 /** @param {NodeJS.ProcessEnv} [env] */
 export function readSecurityAutodeleteConfig(env = process.env) {
   const channelId = env.DISCORD_HONEYPOT_CHANNEL_ID?.trim();
-  if (!channelId) return undefined;
-  if (!/^\d{17,20}$/u.test(channelId)) throw new Error('Invalid DISCORD_HONEYPOT_CHANNEL_ID');
+  const botId = env.DISCORD_HONEYPOT_BOT_ID?.trim();
+  if (!channelId && !botId) return undefined;
+  if (channelId && !/^\d{17,20}$/u.test(channelId)) throw new Error('Invalid DISCORD_HONEYPOT_CHANNEL_ID');
+  if (botId && !/^\d{17,20}$/u.test(botId)) throw new Error('Invalid DISCORD_HONEYPOT_BOT_ID');
   const mode = env.SECURITY_AUTODELETE_MODE?.trim() || 'dry-run';
   if (!['dry-run', 'enforce'].includes(mode)) throw new Error('Invalid SECURITY_AUTODELETE_MODE');
   /** @param {string} name */
@@ -24,7 +26,7 @@ export function readSecurityAutodeleteConfig(env = process.env) {
     if (!Number.isInteger(value) || value < 1 || value > 200) throw new Error(`Invalid ${name}`);
     return value;
   };
-  return { channelId, mode,
+  return { channelId, ...(botId ? { botId } : {}), mode,
     exemptUsers: ids('SECURITY_AUTODELETE_EXEMPT_USER_IDS'), exemptRoles: ids('SECURITY_AUTODELETE_EXEMPT_ROLE_IDS'),
     userLimit: limit('SECURITY_AUTODELETE_USER_LIMIT', 10), guildLimit: limit('SECURITY_AUTODELETE_GUILD_LIMIT', 30) };
 }
@@ -41,8 +43,12 @@ export function createSecurityAutodelete({ config, guildId, ownerUserId, report,
   alert, annotate, now = Date.now }) {
   /** @type {Map<string, {at: number, messageId: string}>} */
   const triggers = new Map();
+  /** @type {Set<{at: number, messageId: string}>} */
+  const activeTriggers = new Set();
   /** @type {Map<string, {message: import('discord.js').Message, at: number, done: boolean}>} */
   const candidates = new Map();
+  /** @type {Map<string, {receivedAt: number, retained: {message: import('discord.js').Message, at: number, done: boolean}[]}>} */
+  const attribution = new Map();
   /** @type {Map<string, {message: import('discord.js').Message, at: number, warnedAt?: number}>} */
   const activity = new Map();
   /** @type {Map<string, Promise<void>>} */
@@ -78,10 +84,25 @@ export function createSecurityAutodelete({ config, guildId, ownerUserId, report,
     await notify(`Security auto-delete paused: ${reason}. Manual review required.`);
   }
   function prune() {
+    for (const [id, item] of attribution) if (now() - item.receivedAt >= WINDOW) attribution.delete(id);
     for (const [id, item] of activity) if (now() - item.at >= WARNING_WINDOW) activity.delete(id);
-    for (const [id, item] of triggers) if (now() - item.at >= WINDOW) triggers.delete(id);
+    for (const [id, item] of triggers) if (now() - item.at >= WINDOW && !activeTriggers.has(item)) triggers.delete(id);
     for (const [id, item] of candidates) if (now() - item.at >= WINDOW) candidates.delete(id);
     while (actions[0] && now() - actions[0].at >= RATE_WINDOW) actions.shift();
+  }
+  /** @param {import('discord.js').Guild} guild @param {string} userId */
+  async function confirmedBan(guild, userId) {
+    const ban = await guild.bans.fetch({ user: userId, force: true, cache: false }).catch(error => {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 10026) return null;
+      throw error;
+    });
+    if (!ban || !/^Triggered honeypot\s*->\s*ban$/iu.test(ban.reason ?? '')) return;
+    const audit = await guild.fetchAuditLogs({ limit: 100 });
+    const entry = audit.entries.find(item => item.targetId === userId
+      && (item.action === AuditLogEvent.MemberBanAdd || item.action === AuditLogEvent.MemberBanRemove));
+    if (entry?.action === AuditLogEvent.MemberBanAdd && entry.executorId === config.botId
+      && entry.reason === ban.reason) return entry;
+    return undefined;
   }
   /** @param {import('discord.js').Message} message */
   async function eligible(message) {
@@ -127,14 +148,15 @@ export function createSecurityAutodelete({ config, guildId, ownerUserId, report,
     warningChain = work;
     return work;
   }
-  /** @param {string} userId */
-  async function correlate(userId) {
+  /** @param {string} userId @param {Iterable<{message: import('discord.js').Message, at: number, done: boolean}>} [retained] */
+  async function correlate(userId, retained) {
     prune();
     const trigger = triggers.get(userId);
     if (!trigger || paused) return;
-    for (const candidate of candidates.values()) {
+    for (const candidate of retained ?? candidates.values()) {
       const { message } = candidate;
-      if (candidate.done || scheduled.has(message.id) || message.author.id !== userId || Math.abs(candidate.at - trigger.at) >= WINDOW) continue;
+      if (candidate.done || scheduled.has(message.id) || message.author.id !== userId || Math.abs(candidate.at - trigger.at) >= WINDOW
+        || (config.botId && candidate.at > trigger.at)) continue;
       candidate.done = true;
       try {
         await alert(message, `Honeypot triggered: ${trigger.messageId}`);
@@ -158,7 +180,7 @@ export function createSecurityAutodelete({ config, guildId, ownerUserId, report,
           continue;
         }
         prune();
-        if (paused || !triggers.has(userId) || now() - candidate.at >= WINDOW) continue;
+        if (paused || triggers.get(userId) !== trigger || (!config.botId && now() - candidate.at >= WINDOW)) continue;
         if (actions.length >= config.guildLimit || actions.filter(item => item.userId === userId).length >= config.userLimit) {
           await pause('safety limit reached'); return;
         }
@@ -193,6 +215,7 @@ export function createSecurityAutodelete({ config, guildId, ownerUserId, report,
                 return;
               }
               if (!fresh.inGuild() || fresh.guildId !== guildId || !await eligible(fresh)) throw new Error('Source context or exemption changed');
+              if (config.botId && (await confirmedBan(fresh.guild, userId))?.id !== trigger.messageId) throw new Error('Honeypot ban changed or was removed');
               const currentBot = await fresh.guild.members.fetchMe({ force: true });
               if (!fresh.channel.permissionsFor(currentBot)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages])) throw new Error('Source permissions changed');
               await annotate(message, 'Auto-deleting — honeypot triggered.');
@@ -229,11 +252,56 @@ export function createSecurityAutodelete({ config, guildId, ownerUserId, report,
   return {
     cancel,
     suspend: () => pause('suspended by moderator'),
+    /** @param {import('discord.js').GuildBan} ban @param {boolean} [banned] */
+    onBan(ban, banned = true) {
+      if (!config.botId || ban.guild.id !== guildId) return Promise.resolve();
+      if (!banned) {
+        attribution.delete(ban.user.id);
+        triggers.delete(ban.user.id);
+        return Promise.all([...scheduled].filter(([, item]) => item.message.author.id === ban.user.id)
+          .map(([id]) => cancel(id))).then(() => {});
+      }
+      if (paused) return Promise.resolve();
+      prune();
+      // Capture before queueing or Discord I/O can age eligible messages out of the rolling cache.
+      let snapshot = attribution.get(ban.user.id);
+      if (!snapshot) {
+        if (attribution.size >= 200) return pause('attribution capacity reached');
+        const receivedAt = now();
+        snapshot = { receivedAt, retained: [...candidates.values()].filter(item => item.message.author.id === ban.user.id
+          && receivedAt - item.at < WINDOW) };
+        attribution.set(ban.user.id, snapshot);
+      }
+      const { receivedAt, retained } = snapshot;
+      return enqueue(async () => {
+        if (attribution.get(ban.user.id) !== snapshot) return;
+        const entry = await confirmedBan(ban.guild, ban.user.id);
+        if (attribution.get(ban.user.id) !== snapshot || now() - receivedAt >= WINDOW) return;
+        if (!entry || receivedAt - entry.createdTimestamp >= WINDOW || entry.createdTimestamp > now()) return;
+        if (!triggers.has(ban.user.id) && triggers.size >= 200) { await pause('trigger capacity reached'); return; }
+        const trigger = { at: entry.createdTimestamp, messageId: entry.id };
+        triggers.set(ban.user.id, trigger);
+        activeTriggers.add(trigger);
+        try {
+          // Include gateway messages delivered while attribution was being fetched.
+          await correlate(ban.user.id, new Set([...retained, ...candidates.values()]));
+        } finally { activeTriggers.delete(trigger); }
+      });
+    },
     /** @param {import('discord.js').Message} message */
     observe(message) {
       const at = now();
       if (paused || message.guildId !== guildId || !message.guild || message.author.bot || message.webhookId
         || message.author.id === ownerUserId || config.exemptUsers.includes(message.author.id)) return Promise.resolve();
+      if (config.botId) {
+        prune();
+        const createdAt = message.createdTimestamp ?? at;
+        if (at - createdAt >= WINDOW || createdAt > at || candidates.has(message.id)) return Promise.resolve();
+        if (candidates.size >= 200) return pause('candidate capacity reached');
+        candidates.set(message.id, { message, at: createdAt, done: false });
+        if (!triggers.has(message.author.id)) return Promise.resolve();
+        return enqueue(() => correlate(message.author.id));
+      }
       if (message.channelId !== config.channelId) {
         prune();
         activity.delete(message.author.id);
@@ -268,7 +336,7 @@ export function createSecurityAutodelete({ config, guildId, ownerUserId, report,
       await Promise.all([...scheduled.keys()].map(cancel));
       await chain;
       await warningChain;
-      triggers.clear(); candidates.clear(); activity.clear();
+      triggers.clear(); candidates.clear(); attribution.clear(); activity.clear();
     },
   };
 }

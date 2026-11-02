@@ -1,4 +1,5 @@
 import {
+  AuditLogEvent,
   Client,
   Events,
   GatewayIntentBits,
@@ -46,10 +47,16 @@ export function createBot(context) {
       send: async evidence => { await scamAlerts.send(evidence); await autodelete?.flag(evidence); } });
     client.on(Events.GuildBanAdd, (ban) => { void scamAlerts.onBan(ban).catch((error) => {
       context.logger.error({ err: error }, 'Security ban event failed');
-    }); });
+    }); void autodelete?.onBan(ban).catch(error => context.logger.error({ err: error }, 'Honeypot ban cleanup failed')); });
     client.on(Events.GuildBanRemove, (ban) => { void scamAlerts.onBan(ban, false).catch((error) => {
       context.logger.error({ err: error }, 'Security unban event failed');
-    }); });
+    }); void autodelete?.onBan(ban, false).catch(error => context.logger.error({ err: error }, 'Honeypot cleanup cancellation failed')); });
+    client.on(Events.GuildAuditLogEntryCreate, (entry, guild) => {
+      if (guild.id !== context.guildId || entry.action !== AuditLogEvent.MemberBanAdd
+        || entry.executorId !== context.securityAutodelete?.botId || !entry.targetId) return;
+      void guild.bans.fetch({ user: entry.targetId, force: true, cache: false }).then(ban => autodelete?.onBan(ban))
+        .catch(error => context.logger.warn({ err: error }, 'Honeypot audit cleanup unavailable'));
+    });
     client.on(Events.MessageDelete, (message) => { void scamAlerts.onDelete(message).catch((error) => {
       context.logger.error({ err: error }, 'Security deletion event failed');
     }); });
