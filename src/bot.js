@@ -7,7 +7,7 @@ import {
   Partials,
 } from 'discord.js';
 import { fixHdrMessage } from './hdr-avif.js';
-import { handleRule8Button, moderateRule8 } from './rule-8.js';
+import { handleRuleApproval, handleRuleSelection, showRuleSelector } from './moderation.js';
 import { createScamDetector } from './scam-detection.js';
 import { createScamAlerts } from './scam-alerts.js';
 import { createSecurityAutodelete } from './security-autodelete.js';
@@ -131,7 +131,8 @@ export function createBot(context) {
  * @returns {Promise<void>}
  */
 export async function handleInteraction(interaction, context, scamAlerts) {
-  if (await handleRule8Button(interaction, context)) return;
+  if (await handleRuleSelection(interaction, context)) return;
+  if (await handleRuleApproval(interaction, context)) return;
   if (await scamAlerts?.handle(interaction)) return;
   if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand?.()) {
     return;
@@ -140,17 +141,17 @@ export async function handleInteraction(interaction, context, scamAlerts) {
   const command = context.commands.get(interaction.commandName);
 
   if (!interaction.isChatInputCommand() && interaction.isMessageContextMenuCommand()) {
-    const rule8 = interaction.commandName === 'Report: Rule 8';
-    if ((!rule8 && interaction.commandName !== 'Fix HDR Preview')
+    const ruleReport = interaction.commandName === 'Report Rule Violation';
+    if ((!ruleReport && interaction.commandName !== 'Fix HDR Preview')
       || interaction.guildId !== context.guildId || !context.guildId) {
       await interaction.reply({ content: 'This command is restricted to the configured server.', flags: MessageFlags.Ephemeral });
       return;
     }
     try {
-      if (rule8) await moderateRule8(interaction, context);
+      if (ruleReport) await showRuleSelector(interaction, context);
       else await fixHdrMessage(interaction);
     } catch (error) {
-      const failure = rule8 ? 'Rule 8 action failed. Check the bot logs for details.' : 'HDR conversion failed.';
+      const failure = ruleReport ? 'Rule action failed. Check the bot logs for details.' : 'HDR conversion failed.';
       context.logger.error({ err: error, interactionId: interaction.id }, failure);
       if (interaction.deferred) await interaction.editReply(failure);
       else await interaction.reply({ content: failure, flags: MessageFlags.Ephemeral });

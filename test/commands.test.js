@@ -16,10 +16,10 @@ describe('built-in commands', () => {
   it('discovers every initial command in deterministic order', async () => {
     const commands = await loadCommands();
 
-    assert.deepEqual([...commands.keys()], ['findmessages', 'Fix HDR Preview', 'fixpng', 'pin', 'ping', 'review-collect', 'Report: Rule 8', 'summarize']);
+    assert.deepEqual([...commands.keys()], ['findmessages', 'Fix HDR Preview', 'fixpng', 'pin', 'ping', 'Report Rule Violation', 'review-collect', 'summarize']);
     assert.deepEqual(
       [...commands.values()].map((command) => command.data.toJSON().name),
-      ['findmessages', 'Fix HDR Preview', 'fixpng', 'pin', 'ping', 'review-collect', 'Report: Rule 8', 'summarize'],
+      ['findmessages', 'Fix HDR Preview', 'fixpng', 'pin', 'ping', 'Report Rule Violation', 'review-collect', 'summarize'],
     );
   });
 
