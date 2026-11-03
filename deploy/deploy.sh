@@ -109,7 +109,33 @@ fi
 
 mv .deploy.env.next .deploy.env
 
+# Use modules present in both new and old images: historical runtime images do
+# not include scripts/register-commands.js. stdin is executed from /app using
+# the running container's credentials, without starting another gateway client.
+register_commands() {
+  docker compose --env-file .deploy.env -f compose.yaml exec -T app node --input-type=module <<'JS'
+import { REST, Routes } from 'discord.js';
+import { loadCommands } from './src/commands/load-commands.js';
+import { readCommandRegistrationConfig } from './src/config.js';
+import { logger } from './src/logger.js';
+
+try {
+  const config = readCommandRegistrationConfig();
+  const commands = await loadCommands();
+  const body = [...commands.values()].map(command => command.data.toJSON());
+  logger.info({ commandCount: body.length, guildId: config.guildId }, 'Registering deployed application commands');
+  await new REST({ version: '10' }).setToken(config.token)
+    .put(Routes.applicationGuildCommands(config.applicationId, config.guildId), { body });
+  logger.info('Deployed application commands registered');
+} catch (error) {
+  logger.error({ err: error }, 'Deployed application command registration failed');
+  process.exitCode = 1;
+}
+JS
+}
+
 if docker compose --env-file .deploy.env -f compose.yaml up -d --no-deps --wait app \
+  && register_commands \
   && ln -s "$release_dir" /opt/renobot/public.next \
   && mv -Tf /opt/renobot/public.next /opt/renobot/public; then
   docker image prune -f --filter 'until=168h' >/dev/null
@@ -125,5 +151,6 @@ if [[ -n "$previous_image" ]]; then
     chmod 600 .deploy.env
   )
   docker compose --env-file .deploy.env -f compose.yaml up -d --no-deps --wait app
+  register_commands
 fi
 exit 1

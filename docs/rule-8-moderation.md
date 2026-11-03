@@ -17,10 +17,16 @@
 - Verify regression tests fail before the fixes, then pass unchanged afterward.
 
 ## Usage and deployment
-Register application commands with the existing `commands:register` npm script and deploy/restart the updated bot through the normal deployment workflow.
+Production deployment registers guild application commands automatically after the new app becomes healthy and before publishing its static files. A registration failure fails deployment and, when a previous image exists, rolls back the app and registers that image's commands again. Registration uses the running image's command definitions and production credentials; no extra bot login is started. Older images do not contain the registration CLI script, so deployment invokes their shared configuration and command-loader modules directly.
+For local/manual registration, the existing `commands:register` npm script remains available.
 Right-click a message, select **Apps → Report: Rule 8**. There is no confirmation dialog for moderators; other members receive a private report receipt.
 The configured `DISCORD_SECURITY_CHANNEL_ID` must identify the security destination. The existing security subsystem also requires `DISCORD_MESSAGE_CONTENT_INTENT=true` and the corresponding Discord privileged intent approval/setting. Evidence is forwarded before deletion when Discord permits it. Reports include reporter, author, message link and status with mentions suppressed.
 The security approval button persists across bot restarts. It is consumed before moderation, and repeated clicks are rejected. Failed timeouts can be retried; failed deletions after a successful timeout require manual deletion to avoid extending the punishment. Duplicate member reports for the same message are suppressed for five minutes in a bounded, process-local cache.
 The bot needs View Channel, Manage Messages, and Moderate Members and a role above the target member.
 The acting moderator must outrank the target (except the server owner). Bots, the acting moderator, and members the bot cannot moderate are rejected.
 Discord message deletion has no audit-reason parameter; `Rule 8` is attached to the timeout and recorded with actor/target/message IDs in the bot log. No message content is logged.
+
+## Deployment fix plan
+- Register the healthy image's guild commands as part of deployment success, before the public symlink switches.
+- Restore the previous image's command list on rollback, including images without the CLI script.
+- Verify registration stays guild-scoped and uses the image's own configuration and command loader; test ordering and run `npm run check` before staging.

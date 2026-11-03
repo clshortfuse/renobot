@@ -8,6 +8,16 @@ const compose = readFileSync(new URL('../deploy/compose.yaml', import.meta.url),
 const workflow = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
 
 describe('public static deployment', () => {
+  it('registers guild commands from the healthy runtime before publishing and restores them on rollback', () => {
+    assert.match(deploy, /register_commands\(\) \{[\s\S]*?docker compose --env-file \.deploy\.env -f compose\.yaml exec -T app node --input-type=module/u);
+    assert.match(deploy, /import \{ loadCommands \} from '\.\/src\/commands\/load-commands\.js'/u);
+    assert.match(deploy, /import \{ readCommandRegistrationConfig \} from '\.\/src\/config\.js'/u);
+    assert.match(deploy, /Routes\.applicationGuildCommands\(config\.applicationId, config\.guildId\)/u);
+    assert.doesNotMatch(deploy, /Routes\.applicationCommands\(/u);
+    assert.match(deploy, /if docker compose [^\n]*up -d --no-deps --wait app \\\n {2}&& register_commands \\\n {2}&& ln -s/u);
+    assert.match(deploy, /if \[\[ -n "\$previous_image" \]\]; then[\s\S]*?up -d --no-deps --wait app\s+register_commands\s+fi/u);
+  });
+
   it('builds architectures natively and merges them before deploying by digest', () => {
     assert.match(workflow, /arch: amd64\s+runner: ubuntu-24\.04/u);
     assert.match(workflow, /arch: arm64\s+runner: ubuntu-24\.04-arm/u);
